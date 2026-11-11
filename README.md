@@ -63,9 +63,10 @@ in.frcce.ecs/
 
 The database schema (`sql/schema.sql`) enforces integrity at the relational level:
 - **Hard Clashes Prevented by Database Constraints**:
-  - `uq_faculty_slot (faculty_id, slot_id, academic_year)`: Prevents faculty double-booking.
+  - `uq_faculty_slot (faculty_id, slot_id, academic_year)`: Prevents a faculty member from being double-booked across classes in the same academic year.
   - `uq_class_slot (class_id, slot_id, academic_year)`: Prevents a class from having two overlapping sessions.
-  - `uq_room_slot (room_id, slot_id, academic_year)`: Prevents room collision.
+  - `uq_room_slot (room_id, slot_id, academic_year)`: Prevents a room from being double-booked across classes in the same academic year.
+- **Separate Workload Types**: Subjects store theory, practical, tutorial, and project hours independently; project allocations use the `PJ` session type.
 - **Trigger**: `trg_check_faculty_max_hours` raises SQLSTATE 45000 if an insert causes faculty to exceed `max_hours_per_week`.
 - **Stored Procedure**: `sp_faculty_workload(faculty_id, academic_year)` returns both workload breakdown and available free slots.
 - **Views**: `vw_class_timetable`, `vw_faculty_timetable`, `vw_room_timetable`, `vw_faculty_workload`.
@@ -217,6 +218,12 @@ mysql -u root -p < sql/schema.sql
 mysql -u root -p < sql/seed.sql
 ```
 
+If you already created the database using an older schema, run `sql/migrate_mysql.sql` before the updated `sql/seed.sql`:
+```bash
+mysql -u root -p < sql/migrate_mysql.sql
+mysql -u root -p < sql/seed.sql
+```
+
 ---
 
 ## Compilation & Execution
@@ -265,9 +272,9 @@ java -jar target/ecs-timetable-generator-1.0.0.jar
 
 ## Academic Context & Seed Data
 
-The seed dataset is modeled directly on the **Fr. Conceicao Rodrigues College of Engineering (FrCRCE)** S.E. ECS timetable:
+The seed dataset includes **Fr. Conceicao Rodrigues College of Engineering (FrCRCE)** ECS classes for S.E. semesters III–IV and T.E. semester V:
 
-- **Class**: S.E. ECS (Semester III & IV, Division A), Room 307
+- **Classes**: S.E. ECS (Semesters III & IV, Division A) and T.E. ECS (Semester V, Division A), academic year 2026–27
 - **Class Teacher**: Prof. Vaibhav Godbole (VVG)
 - **Time Slots**:
   - `08:45 - 09:45`: Slot 1
@@ -295,6 +302,8 @@ The seed dataset is modeled directly on the **Fr. Conceicao Rodrigues College of
   - `25HSSM2EC02`: Human Values and Professional Ethics (HVPE) — 1 TH + 2 PR (Prof. Annivilia Pereira)
   - `25CEP12EC01`: Community Engagement Project (CEP) — 4 Project Hours (Prof. Vaibhav Godbole)
   - `25DM12EC01`: Double Minor Course (DM) — 2 TH (Dr. Dipak Bauskar)
+- **Semester V workload rule**: Each supplied T.E. subject is seeded with 2 TH hours and 2 PR hours weekly; each practical block uses two consecutive one-hour timetable slots. ESI and HWP have no faculty allocation until one is supplied.
+- **T.E. course codes**: Internal codes are used for the seeded semester V courses because official course codes were not provided.
 
 ---
 

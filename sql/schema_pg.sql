@@ -34,7 +34,7 @@ CREATE TABLE faculty (
     faculty_id         SERIAL PRIMARY KEY,
     name               VARCHAR(100) NOT NULL,
     abbreviation       VARCHAR(10)  NOT NULL,
-    email              VARCHAR(150) NOT NULL UNIQUE,
+    email              VARCHAR(150) UNIQUE,
     designation        VARCHAR(50)  NOT NULL DEFAULT 'Assistant Professor',
     max_hours_per_week SMALLINT     NOT NULL DEFAULT 20,
     dept_id            INT          NOT NULL REFERENCES department(dept_id) ON UPDATE CASCADE ON DELETE RESTRICT,
@@ -57,6 +57,7 @@ CREATE TABLE subject (
     theory_hrs    SMALLINT     NOT NULL DEFAULT 0,
     practical_hrs SMALLINT     NOT NULL DEFAULT 0,
     tutorial_hrs  SMALLINT     NOT NULL DEFAULT 0,
+    project_hrs   SMALLINT     NOT NULL DEFAULT 0 CHECK (project_hrs >= 0),
     is_active     BOOLEAN      NOT NULL DEFAULT TRUE
 );
 
@@ -128,7 +129,7 @@ CREATE TABLE faculty_subject (
     faculty_id   INT         NOT NULL REFERENCES faculty(faculty_id) ON UPDATE CASCADE ON DELETE CASCADE,
     subject_id   INT         NOT NULL REFERENCES subject(subject_id) ON UPDATE CASCADE ON DELETE CASCADE,
     class_id     INT         NOT NULL REFERENCES class_division(class_id) ON UPDATE CASCADE ON DELETE CASCADE,
-    session_type VARCHAR(10) NOT NULL DEFAULT 'ALL',
+    session_type VARCHAR(10) NOT NULL DEFAULT 'ALL' CHECK (session_type IN ('TH','PR','TU','PJ','ALL')),
     CONSTRAINT uq_faculty_subject_class UNIQUE (faculty_id, subject_id, class_id, session_type)
 );
 
@@ -160,7 +161,7 @@ CREATE TABLE timetable_entry (
     faculty_id    INT         NOT NULL REFERENCES faculty(faculty_id) ON UPDATE CASCADE ON DELETE RESTRICT,
     room_id       INT         NOT NULL REFERENCES room(room_id) ON UPDATE CASCADE ON DELETE RESTRICT,
     slot_id       INT         NOT NULL REFERENCES time_slot(slot_id) ON UPDATE CASCADE ON DELETE RESTRICT,
-    session_type  VARCHAR(10) NOT NULL,
+    session_type  VARCHAR(10) NOT NULL CHECK (session_type IN ('TH','PR','TU','PJ')),
     academic_year VARCHAR(9)  NOT NULL DEFAULT '2026-27',
     is_locked     BOOLEAN     NOT NULL DEFAULT FALSE,
 
