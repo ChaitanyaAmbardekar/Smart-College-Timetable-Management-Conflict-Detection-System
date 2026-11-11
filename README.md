@@ -285,7 +285,6 @@ The seed dataset includes **Fr. Conceicao Rodrigues College of Engineering (FrCR
   - `13:00 - 13:30`: *Lunch Break*
   - `13:30 - 14:30`: Slot 7
   - `14:30 - 15:30`: Slot 8
-  - `15:30 - 16:30`: Slot 9
 - **Laboratories & Rooms**:
   - Classrooms: Room 307, 308, 309, 310
   - Labs: ECS Lab 1, ECS Lab 2, Computer Lab 1 & 2, Electronics Lab 1 & 2

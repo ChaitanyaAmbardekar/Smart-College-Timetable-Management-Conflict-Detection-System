@@ -275,37 +275,73 @@ public class TimetableViewPanel extends JPanel implements MainFrame.Refreshable 
                 .sorted(Comparator.comparingInt(TimeSlot::getSlotNo))
                 .collect(Collectors.toList());
 
-        int rows = uniqueSlots.size() + 1; // +1 for header
-        int cols = DAYS.length + 1;        // +1 for time column
-
-        JPanel grid = new JPanel(new GridLayout(rows, cols, 1, 1));
+        JPanel grid = new JPanel(new GridBagLayout());
         grid.setBackground(new Color(0xDA, 0xDC, 0xE0)); // grid line color
 
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.fill = GridBagConstraints.BOTH;
+        gbc.insets = new Insets(0, 0, 1, 1);
+
         // Header row
-        grid.add(makeHeaderCell("Time \\ Day"));
-        for (String day : DAYS) {
-            grid.add(makeHeaderCell(day.substring(0, 3))); // Mon, Tue...
+        gbc.gridy = 0;
+        gbc.weighty = 0.0;
+        gbc.gridx = 0;
+        gbc.weightx = 0.0;
+        JPanel cornerHeader = makeHeaderCell("Time \\ Day");
+        cornerHeader.setPreferredSize(new Dimension(82, 30));
+        grid.add(cornerHeader, gbc);
+
+        gbc.weightx = 1.0;
+        for (int c = 0; c < DAYS.length; c++) {
+            gbc.gridx = c + 1;
+            JPanel dayHeader = makeHeaderCell(DAYS[c].substring(0, 3)); // Mon, Tue...
+            dayHeader.setPreferredSize(new Dimension(140, 30));
+            grid.add(dayHeader, gbc);
         }
 
-        // Data rows
-        for (TimeSlot slotDef : uniqueSlots) {
-            // Time column
-            JPanel timeCell = makeTimeCell(slotDef);
-            grid.add(timeCell);
+        // Data rows (per-row heights via GridBagLayout so breaks/TH rows don't stretch to PR height)
+        for (int r = 0; r < uniqueSlots.size(); r++) {
+            TimeSlot slotDef = uniqueSlots.get(r);
+            gbc.gridy = r + 1;
 
-            for (String day : DAYS) {
+            boolean isBreakRow = slotDef.isBreak();
+            boolean hasMultiEntryRow = false;
+            if (!isBreakRow) {
+                for (String day : DAYS) {
+                    if (entryMap.getOrDefault(day + "_" + slotDef.getSlotNo(), Collections.emptyList()).size() > 2) {
+                        hasMultiEntryRow = true;
+                        break;
+                    }
+                }
+            }
+
+            gbc.weighty = isBreakRow ? 0.0 : (hasMultiEntryRow ? 1.4 : 1.0);
+
+            // Time column
+            gbc.gridx = 0;
+            gbc.weightx = 0.0;
+            JPanel timeCell = makeTimeCell(slotDef);
+            int timeRowHeight = isBreakRow ? 24 : (hasMultiEntryRow ? 84 : 46);
+            timeCell.setPreferredSize(new Dimension(82, timeRowHeight));
+            grid.add(timeCell, gbc);
+
+            gbc.weightx = 1.0;
+            for (int c = 0; c < DAYS.length; c++) {
+                String day = DAYS[c];
+                gbc.gridx = c + 1;
                 String key = day + "_" + slotDef.getSlotNo();
                 List<TimetableEntry> dayEntries = entryMap.getOrDefault(key, Collections.emptyList());
 
-                if (slotDef.isBreak()) {
+                if (isBreakRow) {
                     JPanel bc = new JPanel(new BorderLayout());
                     bc.setBackground(COLOR_BREAK);
+                    bc.setPreferredSize(new Dimension(140, 24));
                     JLabel bl = new JLabel(slotDef.getSlotNo() == 3 ? "Short Break" : "Lunch Break",
                             SwingConstants.CENTER);
                     bl.setFont(new Font("Segoe UI", Font.ITALIC, 10));
                     bl.setForeground(Color.GRAY);
                     bc.add(bl, BorderLayout.CENTER);
-                    grid.add(bc);
+                    grid.add(bc, gbc);
                 } else if (dayEntries.isEmpty()) {
                     JPanel free = new JPanel(new BorderLayout());
                     free.setBackground(COLOR_FREE);
@@ -321,22 +357,25 @@ public class TimetableViewPanel extends JPanel implements MainFrame.Refreshable 
                             }
                         });
                     }
-                    grid.add(free);
+                    grid.add(free, gbc);
+                } else if (dayEntries.size() == 1) {
+                    grid.add(makeEntryCell(dayEntries.get(0)), gbc);
                 } else {
-                    // Could be multiple entries (batch parallel sessions)
-                    JPanel cellPanel = new JPanel(new GridLayout(dayEntries.size(), 1, 0, 1));
+                    // Compact 2-column grid for parallel batches (2x2 for 4 batches, 1x2 for 2 splits)
+                    int subCols = 2;
+                    int subRows = (int) Math.ceil(dayEntries.size() / 2.0);
+                    JPanel cellPanel = new JPanel(new GridLayout(subRows, subCols, 1, 1));
                     cellPanel.setBackground(Color.LIGHT_GRAY);
                     for (TimetableEntry te : dayEntries) {
                         cellPanel.add(makeEntryCell(te));
                     }
-                    grid.add(cellPanel);
+                    grid.add(cellPanel, gbc);
                 }
             }
         }
 
-        JScrollPane innerScroll = new JScrollPane(grid);
-        innerScroll.setBorder(null);
-        gridPanel.add(innerScroll, BorderLayout.CENTER);
+        // gridPanel itself lives inside the outer JScrollPane created in buildUI()
+        gridPanel.add(grid, BorderLayout.CENTER);
         gridPanel.revalidate();
         gridPanel.repaint();
     }

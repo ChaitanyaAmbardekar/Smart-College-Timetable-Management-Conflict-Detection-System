@@ -68,6 +68,11 @@ public class TimetableEntryDAO {
             "WHERE  te.slot_id = ? AND te.academic_year = ? " +
             "ORDER  BY te.class_id";
 
+    private static final String SQL_FIND_OTHER_CLASSES =
+            SELECT_RICH +
+            "WHERE  te.class_id <> ? AND te.academic_year = ? " +
+            "ORDER  BY te.class_id, ts.slot_no";
+
     // Conflict-detection
     private static final String SQL_IS_FACULTY_BUSY =
             "SELECT COUNT(*) FROM timetable_entry " +
@@ -115,7 +120,7 @@ public class TimetableEntryDAO {
             "DELETE FROM timetable_entry WHERE entry_id = ?";
 
     private static final String SQL_DELETE_BY_CLASS =
-            "DELETE FROM timetable_entry WHERE class_id = ? AND academic_year = ?";
+            "DELETE FROM timetable_entry WHERE class_id = ? AND academic_year = ? AND is_locked = FALSE";
 
     private static final String SQL_COUNT_BY_FACULTY =
             "SELECT COUNT(*) FROM timetable_entry " +
@@ -154,6 +159,18 @@ public class TimetableEntryDAO {
     public List<TimetableEntry> findByRoom(int roomId, String academicYear) {
         return fetchRichList(SQL_FIND_BY_ROOM, ps -> {
             ps.setInt(1, roomId);
+            ps.setString(2, academicYear);
+        });
+    }
+
+    /**
+     * Returns all persisted timetable entries for OTHER classes/years in the
+     * same academic year so scheduling respects existing cross-year faculty and
+     * room commitments.
+     */
+    public List<TimetableEntry> findOtherClasses(int excludeClassId, String academicYear) {
+        return fetchRichList(SQL_FIND_OTHER_CLASSES, ps -> {
+            ps.setInt(1, excludeClassId);
             ps.setString(2, academicYear);
         });
     }

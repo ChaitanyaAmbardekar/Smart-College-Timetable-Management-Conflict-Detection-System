@@ -53,17 +53,49 @@ public class DBInitializer {
         }
 
         System.out.println("2. Applying sql/schema.sql...");
-        runSqlFile("sql/schema.sql", rawUrl, username, password);
+        boolean schemaOk = runSqlFile("sql/schema.sql", rawUrl, username, password);
 
-        System.out.println("3. Applying sql/seed.sql...");
-        runSqlFile("sql/seed.sql", rawUrl, username, password);
+        System.out.println("3. Applying sql/migrate_mysql.sql...");
+        boolean migrateOk = runSqlFile("sql/migrate_mysql.sql", rawUrl, username, password);
+
+        System.out.println("4. Applying sql/seed.sql...");
+        boolean seedOk = runSqlFile("sql/seed.sql", rawUrl, username, password);
+
+        if (!schemaOk || !migrateOk || !seedOk) {
+            System.err.println("Database initialization failed!");
+            System.exit(1);
+        }
+
+        printDatabaseSummary(rawUrl, username, password);
 
         System.out.println("=============================================================");
         System.out.println("Database initialization completed successfully!");
         System.out.println("=============================================================");
     }
 
-    private static void runSqlFile(String filePath, String url, String user, String pass) {
+    private static void printDatabaseSummary(String url, String user, String pass) {
+        System.out.println("5. Verifying database contents...");
+        try (Connection con = DriverManager.getConnection(url, user, pass);
+             Statement st = con.createStatement()) {
+            try (var rs = st.executeQuery(
+                    "SELECT cd.class_id, cd.year, cd.semester, cd.division, cd.academic_year, " +
+                    "(SELECT COUNT(*) FROM batch b WHERE b.class_id = cd.class_id) AS batches, " +
+                    "(SELECT COUNT(*) FROM subject s WHERE s.semester = cd.semester) AS subjects, " +
+                    "(SELECT COUNT(*) FROM faculty_subject fs WHERE fs.class_id = cd.class_id) AS allocations " +
+                    "FROM class_division cd ORDER BY cd.semester, cd.division")) {
+                while (rs.next()) {
+                    System.out.printf("   - Class #%d: Year %d Sem %d Div %s (%s) | Batches=%d | Subjects=%d | Allocations=%d%n",
+                            rs.getInt("class_id"), rs.getInt("year"), rs.getInt("semester"),
+                            rs.getString("division"), rs.getString("academic_year"),
+                            rs.getInt("batches"), rs.getInt("subjects"), rs.getInt("allocations"));
+                }
+            }
+        } catch (SQLException e) {
+            System.err.println("   [WARN] Could not verify summary: " + e.getMessage());
+        }
+    }
+
+    private static boolean runSqlFile(String filePath, String url, String user, String pass) {
         try (Connection con = DriverManager.getConnection(url, user, pass);
              Statement st = con.createStatement();
              BufferedReader reader = new BufferedReader(new FileReader(filePath))) {
@@ -102,9 +134,11 @@ public class DBInitializer {
                 }
             }
             System.out.println("   [OK] " + filePath + " applied.");
+            return true;
 
         } catch (Exception e) {
             System.err.println("   [FAIL] Could not run " + filePath + ": " + e.getMessage());
+            return false;
         }
     }
 }

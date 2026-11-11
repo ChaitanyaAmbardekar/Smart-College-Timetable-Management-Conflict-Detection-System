@@ -38,8 +38,6 @@ public class SeedDataSchedulingTest {
             allSlots.add(new TimeSlot(slotId++, day, "13:30:00", "14:30:00", 7, false));
             // Slot 8: 14:30 - 15:30
             allSlots.add(new TimeSlot(slotId++, day, "14:30:00", "15:30:00", 8, false));
-            // Slot 9: 15:30 - 16:30
-            allSlots.add(new TimeSlot(slotId++, day, "15:30:00", "16:30:00", 9, false));
         }
 
         List<TimeSlot> activeSlots = allSlots.stream().filter(s -> !s.isBreak()).toList();

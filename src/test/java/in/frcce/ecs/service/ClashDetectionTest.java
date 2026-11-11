@@ -1,11 +1,18 @@
 package in.frcce.ecs.service;
 
+import in.frcce.ecs.model.ConflictReport;
 import in.frcce.ecs.model.FacultySubject;
+import in.frcce.ecs.model.Room;
 import in.frcce.ecs.model.Subject;
+import in.frcce.ecs.model.TimeSlot;
 import in.frcce.ecs.model.TimetableEntry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -247,6 +254,57 @@ public class ClashDetectionTest {
         assertFalse(fs.isWholeClassPractical());
         fs.setPracMode("WHOLE_CLASS");
         assertTrue(fs.isWholeClassPractical());
+    }
+
+    @Test
+    @DisplayName("Cross-year constraint: Timetable generation respects other-class faculty, room, and weekly hour commitments")
+    void testCrossYearFacultyAndRoomAvailability() {
+        TimetableEntry ty1 = new TimetableEntry();
+        ty1.setClassId(3);
+        ty1.setFacultyId(3);
+        ty1.setRoomId(1);
+        ty1.setSlotId(1);
+        ty1.setDay("MONDAY");
+        ty1.setSessionType("TH");
+        state.preloadOtherClassEntry(ty1);
+
+        TimetableEntry ty2 = new TimetableEntry();
+        ty2.setClassId(3);
+        ty2.setFacultyId(3);
+        ty2.setRoomId(5);
+        ty2.setSlotId(2);
+        ty2.setDay("MONDAY");
+        ty2.setSessionType("PR");
+        state.preloadOtherClassEntry(ty2);
+
+        assertFalse(state.isFacultyAvailable(3, 1), "Faculty busy in 3rd year cannot be assigned in slot 1");
+        assertFalse(state.isRoomFree(1, 1), "Room busy in 3rd year cannot be assigned in slot 1");
+        assertTrue(state.isClassFree(1, null, 1), "Target 2nd-year class itself remains free in slot 1");
+        assertEquals(2, state.facultySessionCount(3), "Other-class commitments count toward faculty hours");
+        assertTrue(state.getPlaced().isEmpty(), "Preloaded other-class entries must not be placed into target class");
+
+        List<TimeSlot> slots = List.of(
+                new TimeSlot(1, "MONDAY", "09:00", "10:00", 1, false),
+                new TimeSlot(2, "MONDAY", "10:00", "11:00", 2, false),
+                new TimeSlot(3, "MONDAY", "11:15", "12:15", 3, false),
+                new TimeSlot(4, "TUESDAY", "09:00", "10:00", 1, false)
+        );
+        List<Room> rooms = List.of(
+                new Room(1, "302", "CLASSROOM", 70, "3rd Floor", true),
+                new Room(2, "303", "CLASSROOM", 70, "3rd Floor", true)
+        );
+        List<ScheduleTask> tasks = new ArrayList<>();
+        tasks.add(new ScheduleTask(10, "DBMS", "DBMS", 1, null, 3, "TH", 1, 60, "2026-27", List.of(1)));
+        tasks.add(new ScheduleTask(10, "DBMS", "DBMS", 1, null, 3, "TH", 1, 60, "2026-27", List.of(1)));
+
+        TimetableService service = new TimetableService();
+        List<ConflictReport> conflicts = new ArrayList<>();
+        service.scheduleTasks(tasks, state, slots, rooms, Map.of(3, 4), conflicts);
+
+        assertTrue(conflicts.isEmpty(), "Should place both TH sessions in remaining free slots");
+        assertEquals(2, state.getPlaced().size());
+        assertTrue(state.getPlaced().stream().noneMatch(e -> e.getSlotId() == 1 || e.getSlotId() == 2),
+                "Generated entries must avoid faculty 3's busy 3rd-year slots");
     }
 }
 

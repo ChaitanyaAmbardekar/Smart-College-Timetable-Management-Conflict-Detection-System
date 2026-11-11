@@ -18,6 +18,8 @@ public class SchedulingState {
     private final Set<String>          occupiedBatchSlots      = new HashSet<>();
     private final Set<String>          occupiedRoomSlots       = new HashSet<>();
     private final Set<String>          facultyUnavailable      = new HashSet<>();
+    private final Set<String>          roomUnavailable         = new HashSet<>();
+    private final Map<Integer, Integer> externalFacultyHours   = new HashMap<>();
 
     // Placed entries (committed result)
     private final List<TimetableEntry> placed = new ArrayList<>();
@@ -25,6 +27,22 @@ public class SchedulingState {
     // -------------------------------------------------------------------------
     public void markFacultyUnavailable(int facultyId, int slotId) {
         facultyUnavailable.add(key(facultyId, slotId));
+    }
+
+    public void markRoomUnavailable(int roomId, int slotId) {
+        roomUnavailable.add(key(roomId, slotId));
+    }
+
+    /**
+     * Pre-loads an already scheduled entry from another class/year (e.g. 3rd year Sem 5)
+     * so faculty availability, room availability, and faculty weekly workload are
+     * respected without mixing external rows into {@link #getPlaced()}.
+     */
+    public void preloadOtherClassEntry(TimetableEntry existing) {
+        if (existing == null) return;
+        markFacultyUnavailable(existing.getFacultyId(), existing.getSlotId());
+        markRoomUnavailable(existing.getRoomId(), existing.getSlotId());
+        externalFacultyHours.merge(existing.getFacultyId(), 1, Integer::sum);
     }
 
     public boolean isFacultyAvailable(int facultyId, int slotId) {
@@ -51,7 +69,8 @@ public class SchedulingState {
     }
 
     public boolean isRoomFree(int roomId, int slotId) {
-        return !occupiedRoomSlots.contains(key(roomId, slotId));
+        return !occupiedRoomSlots.contains(key(roomId, slotId))
+            && !roomUnavailable.contains(key(roomId, slotId));
     }
 
     // -------------------------------------------------------------------------
@@ -82,9 +101,10 @@ public class SchedulingState {
     public List<TimetableEntry> getPlaced() { return Collections.unmodifiableList(placed); }
 
     // -------------------------------------------------------------------------
-    /** Count how many sessions a faculty has been assigned so far. */
+    /** Count how many sessions a faculty has been assigned so far (including other classes/years). */
     public int facultySessionCount(int facultyId) {
-        return (int) placed.stream().filter(e -> e.getFacultyId() == facultyId).count();
+        int current = (int) placed.stream().filter(e -> e.getFacultyId() == facultyId).count();
+        return current + externalFacultyHours.getOrDefault(facultyId, 0);
     }
 
     /** Count sessions for a subject within a class on a specific day. */
@@ -141,12 +161,48 @@ public class SchedulingState {
 
     /** Returns true if another batch of this class already has a PR session at the given slot. */
     public boolean hasBatchPracticalAtSlot(int classId, int slotId) {
-        return placed.stream().anyMatch(e ->
+        return batchPracticalCountAtSlot(classId, slotId) > 0;
+    }
+
+    /** Count how many batches of this class already have a PR session at the given slot. */
+    public int batchPracticalCountAtSlot(int classId, int slotId) {
+        return (int) placed.stream().filter(e ->
                 e.getClassId() == classId
              && e.getSlotId() == slotId
              && "PR".equalsIgnoreCase(e.getSessionType())
              && hasBatch(e)
-        );
+        ).count();
+    }
+
+    /** Count total distinct occupied time slots for a class across the whole week. */
+    public int distinctClassSlotsTotal(int classId) {
+        return (int) placed.stream()
+                .filter(e -> e.getClassId() == classId)
+                .mapToInt(TimetableEntry::getSlotId)
+                .distinct()
+                .count();
+    }
+
+    /** Count distinct occupied time slots for a class on a given day (for daily load balancing). */
+    public int distinctClassSlotsOnDay(int classId, String day) {
+        if (day == null) return 0;
+        return (int) placed.stream()
+                .filter(e -> e.getClassId() == classId && day.equalsIgnoreCase(e.getDay()))
+                .mapToInt(TimetableEntry::getSlotId)
+                .distinct()
+                .count();
+    }
+
+    /** Count distinct practical 2-hour time windows used by a class on a given day. */
+    public int practicalWindowsOnDay(int classId, String day) {
+        if (day == null) return 0;
+        return (int) placed.stream()
+                .filter(e -> e.getClassId() == classId
+                          && day.equalsIgnoreCase(e.getDay())
+                          && "PR".equalsIgnoreCase(e.getSessionType()))
+                .mapToInt(TimetableEntry::getSlotId)
+                .distinct()
+                .count() / 2;
     }
 
     /** Count distinct practical slot-pairs/sessions on a given day for day-load balancing. */

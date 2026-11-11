@@ -34,7 +34,10 @@ public class TimetableService {
     private static final Logger LOG = Logger.getLogger(TimetableService.class.getName());
 
     /** Max milliseconds before giving up on backtracking and switching to greedy. */
-    private static final long TIME_LIMIT_MS = 15_000;
+    private static final long TIME_LIMIT_MS = 5_000;
+
+    /** Max failed backtracking branches before restoring best partial placement and repairing. */
+    private static final int MAX_BACKTRACK_FAILURES = 2_500;
 
     private final ClassDivisionDAO        classDivisionDAO;
     private final BatchDAO                batchDAO;
@@ -91,6 +94,10 @@ public class TimetableService {
         List<FacultySubject>    allocs    = facultySubjectDAO.findByClass(classId);
         List<Batch>             batches   = batchDAO.findByClass(classId);
         List<FacultyUnavailability> unavails = unavailDAO.findAll();
+        List<TimetableEntry>    otherClassEntries = timetableEntryDAO.findOtherClasses(classId, academicYear);
+        List<TimetableEntry>    lockedSameClass = timetableEntryDAO.findByClass(classId, academicYear).stream()
+                .filter(TimetableEntry::isLocked)
+                .collect(Collectors.toList());
 
         // Build unavailability lookup: facultyId -> Set<slotId>
         Map<Integer, Set<Integer>> unavailMap = new HashMap<>();
@@ -104,33 +111,40 @@ public class TimetableService {
             maxHours.put(f.getFacultyId(), f.getMaxHoursPerWeek());
         }
 
-        // 2. Build task list
+        // 2. Build task list (skip sessions already fulfilled by locked entries)
         notifyProgress("Building task list...");
-        List<ScheduleTask> tasks = buildTasks(allocs, cd, batches, academicYear);
+        Map<Integer, Subject> subjectMap = new HashMap<>();
+        for (FacultySubject fs : allocs) {
+            subjectMap.computeIfAbsent(fs.getSubjectId(),
+                    id -> subjectDAO.findById(id).orElse(null));
+        }
+        List<ScheduleTask> tasks = filterUnlockedTasks(
+                buildTasks(allocs, cd, batches, academicYear), lockedSameClass, subjectMap);
 
-        // Sort: LAB_BLOCK first, then TUTORIAL, then THEORY (most-constrained first)
-        tasks.sort(Comparator.comparing(ScheduleTask::getPriority));
-
-        notifyProgress("Total tasks to schedule: " + tasks.size());
-
-        // 3. Init scheduling state
+        // 3. Init scheduling state (manual unavailability, locked same-class rows, + other classes/years)
         SchedulingState state = new SchedulingState();
         for (Map.Entry<Integer, Set<Integer>> e : unavailMap.entrySet()) {
             for (int slotId : e.getValue()) {
                 state.markFacultyUnavailable(e.getKey(), slotId);
             }
         }
-
-        // 4. Backtracking with time limit
-        List<ConflictReport> conflicts = new ArrayList<>();
-        long deadline = System.currentTimeMillis() + TIME_LIMIT_MS;
-
-        boolean success = backtrack(tasks, 0, state, slots, rooms, maxHours, deadline, conflicts);
-
-        if (!success) {
-            notifyProgress("Backtracking timed out or failed — switching to greedy repair...");
-            greedyRepair(tasks, state, slots, rooms, maxHours, conflicts);
+        if (!lockedSameClass.isEmpty()) {
+            notifyProgress("Preserving " + lockedSameClass.size() + " locked entries for this class...");
+            for (TimetableEntry locked : lockedSameClass) {
+                state.occupy(locked);
+            }
         }
+        if (!otherClassEntries.isEmpty()) {
+            notifyProgress("Respecting " + otherClassEntries.size()
+                    + " existing slot commitments from other classes/years...");
+            for (TimetableEntry existing : otherClassEntries) {
+                state.preloadOtherClassEntry(existing);
+            }
+        }
+
+        // 4. Schedule using availability-aware MRV + backtracking, falling back to greedy repair
+        List<ConflictReport> conflicts = new ArrayList<>();
+        scheduleTasks(tasks, state, slots, rooms, maxHours, conflicts);
 
         List<TimetableEntry> placed = new ArrayList<>(state.getPlaced());
         notifyProgress("Placement complete: " + placed.size() + " entries placed, "
@@ -142,6 +156,143 @@ public class TimetableService {
         }
 
         return new GenerationResult(placed, conflicts);
+    }
+
+    /**
+     * Orders tasks using priority + Minimum Remaining Values (fewest valid
+     * candidate slots given current faculty/room availability) and schedules them
+     * via bounded backtracking followed by greedy repair if incomplete.
+     */
+    void scheduleTasks(List<ScheduleTask> tasks, SchedulingState state,
+                       List<TimeSlot> slots, List<Room> rooms,
+                       Map<Integer, Integer> maxHours,
+                       List<ConflictReport> conflicts) {
+        Map<ScheduleTask, Integer> initialDomainSizes = new IdentityHashMap<>();
+        Map<Integer, Integer> subjectMinDomainSizes = new HashMap<>();
+        for (ScheduleTask task : tasks) {
+            int size = getCandidates(task, state, slots, rooms, maxHours).size();
+            initialDomainSizes.put(task, size);
+            subjectMinDomainSizes.merge(task.getSubjectId(), size, Math::min);
+        }
+
+        // Order PR batch tasks batch-by-batch so Batch 1 establishes parallel windows
+        // across days and subsequent batches rotate cleanly into those open windows.
+        tasks.sort(Comparator.comparing(ScheduleTask::getPriority)
+                .thenComparingInt(t -> isBatchPractical(t) ? t.getBatchId() : 0)
+                .thenComparingInt(t -> subjectMinDomainSizes.getOrDefault(t.getSubjectId(), Integer.MAX_VALUE))
+                .thenComparingInt(t -> initialDomainSizes.getOrDefault(t, Integer.MAX_VALUE))
+                .thenComparingInt(ScheduleTask::getSubjectId)
+                .thenComparingInt(t -> t.getBatchId() == null ? 0 : t.getBatchId()));
+
+        int totalClassSlots = (int) slots.stream().filter(s -> !s.isBreak()).count();
+        int[] remWholeClassSlotsSuffix = new int[tasks.size() + 1];
+        for (int i = tasks.size() - 1; i >= 0; i--) {
+            ScheduleTask t = tasks.get(i);
+            int wholeSlots = isBatchPractical(t) ? 0 : t.getRequiredSlots();
+            remWholeClassSlotsSuffix[i] = remWholeClassSlotsSuffix[i + 1] + wholeSlots;
+        }
+        int targetClassId = tasks.isEmpty() ? 0 : tasks.get(0).getClassId();
+
+        notifyProgress("Total tasks to schedule: " + tasks.size());
+
+        SearchContext ctx = new SearchContext(
+                System.currentTimeMillis() + TIME_LIMIT_MS, MAX_BACKTRACK_FAILURES,
+                targetClassId, totalClassSlots, remWholeClassSlotsSuffix, state.getPlaced());
+        boolean success = backtrack(tasks, 0, state, slots, rooms, maxHours, ctx);
+
+        if (!success) {
+            notifyProgress("Backtracking could not place all sessions (best partial: "
+                    + ctx.bestPlaced.size() + " entries) — switching to greedy repair...");
+            restoreBestPartial(state, ctx.bestPlaced);
+            greedyRepair(tasks, state, slots, rooms, maxHours, conflicts);
+        }
+    }
+
+    private static List<ScheduleTask> filterUnlockedTasks(List<ScheduleTask> tasks,
+                                                            List<TimetableEntry> lockedEntries,
+                                                            Map<Integer, Subject> subjectMap) {
+        if (lockedEntries.isEmpty()) return tasks;
+        Map<String, Integer> lockedSlotsByKey = new HashMap<>();
+        Map<String, Integer> totalLockedByKey = new HashMap<>();
+        Map<Integer, Set<Integer>> wholeClassSubjectsBySlot = new HashMap<>();
+        for (TimetableEntry te : lockedEntries) {
+            String k = lockedKey(te.getSubjectId(), te.getSessionType(), te.getBatchId());
+            lockedSlotsByKey.merge(k, 1, Integer::sum);
+            totalLockedByKey.merge(k, 1, Integer::sum);
+            if (te.getBatchId() == null) {
+                wholeClassSubjectsBySlot
+                        .computeIfAbsent(te.getSlotId(), ignored -> new HashSet<>())
+                        .add(te.getSubjectId());
+            }
+        }
+        Map<Integer, Set<Integer>> electiveGroups = buildElectiveGroups(wholeClassSubjectsBySlot);
+        List<ScheduleTask> remaining = new ArrayList<>();
+        for (ScheduleTask task : tasks) {
+            String k = lockedKey(task.getSubjectId(), task.getSessionType(), task.getBatchId());
+            Subject sub = subjectMap.get(task.getSubjectId());
+            int targetSlots = weeklyTargetSlots(sub, task.getSessionType());
+            if (targetSlots > 0 && totalLockedByKey.getOrDefault(k, 0) >= targetSlots) {
+                continue; // Already fulfilled by locked entries (even with co-taught allocations)
+            }
+            if (targetSlots > 0 && task.getBatchId() != null) {
+                Set<Integer> group = electiveGroups.get(task.getSubjectId());
+                if (group != null && group.size() > 1) {
+                    int groupLockedForBatch = 0;
+                    for (int altSubjectId : group) {
+                        groupLockedForBatch += totalLockedByKey.getOrDefault(
+                                lockedKey(altSubjectId, task.getSessionType(), task.getBatchId()), 0);
+                    }
+                    if (groupLockedForBatch >= targetSlots) {
+                        continue; // Batch already fulfilled by a peer subject in the same elective group
+                    }
+                }
+            }
+            int lockedAvail = lockedSlotsByKey.getOrDefault(k, 0);
+            if (lockedAvail >= task.getRequiredSlots()) {
+                lockedSlotsByKey.put(k, lockedAvail - task.getRequiredSlots());
+            } else {
+                remaining.add(task);
+            }
+        }
+        return remaining;
+    }
+
+    /**
+     * Infers mutually-exclusive elective subject groups from whole-class locked entries
+     * that share the exact same timetable slot (e.g., PEC choices scheduled in parallel).
+     */
+    private static Map<Integer, Set<Integer>> buildElectiveGroups(Map<Integer, Set<Integer>> wholeClassSubjectsBySlot) {
+        Map<Integer, Set<Integer>> groups = new HashMap<>();
+        for (Set<Integer> coScheduled : wholeClassSubjectsBySlot.values()) {
+            if (coScheduled.size() < 2) continue;
+            Set<Integer> merged = new HashSet<>(coScheduled);
+            for (int sid : coScheduled) {
+                Set<Integer> existing = groups.get(sid);
+                if (existing != null) merged.addAll(existing);
+            }
+            for (int sid : merged) {
+                groups.put(sid, merged);
+            }
+        }
+        return groups;
+    }
+
+    private static int weeklyTargetSlots(Subject sub, String sessionType) {
+        if (sub == null || sessionType == null) return 0;
+        switch (sessionType.toUpperCase()) {
+            case "TH": return sub.getTheoryHrs();
+            case "PR": return sub.getPracticalHrs();
+            case "TU": return sub.getTutorialHrs();
+            default:   return 0;
+        }
+    }
+
+    private static String lockedKey(int subjectId, String sessionType, Integer batchId) {
+        return subjectId + ":" + sessionType + ":" + (batchId == null ? 0 : batchId);
+    }
+
+    private static boolean isBatchPractical(ScheduleTask t) {
+        return "PR".equals(t.getSessionType()) && t.getBatchId() != null && t.getBatchId() > 0;
     }
 
     // =========================================================================
@@ -216,14 +367,55 @@ public class TimetableService {
     // BACKTRACKING ENGINE
     // =========================================================================
 
+    private static final class SearchContext {
+        final long deadline;
+        final int maxFailures;
+        final int targetClassId;
+        final int totalClassSlots;
+        final int[] remWholeClassSlotsSuffix;
+        int failures = 0;
+        List<TimetableEntry> bestPlaced = new ArrayList<>();
+
+        SearchContext(long deadline, int maxFailures, int targetClassId,
+                      int totalClassSlots, int[] remWholeClassSlotsSuffix,
+                      List<TimetableEntry> initialPlaced) {
+            this.deadline = deadline;
+            this.maxFailures = maxFailures;
+            this.targetClassId = targetClassId;
+            this.totalClassSlots = totalClassSlots;
+            this.remWholeClassSlotsSuffix = remWholeClassSlotsSuffix;
+            this.bestPlaced = new ArrayList<>(initialPlaced);
+        }
+    }
+
+    private void restoreBestPartial(SchedulingState state, List<TimetableEntry> bestPlaced) {
+        for (TimetableEntry existing : new ArrayList<>(state.getPlaced())) {
+            state.release(existing);
+        }
+        for (TimetableEntry entry : bestPlaced) {
+            state.occupy(entry);
+        }
+    }
+
     private boolean backtrack(List<ScheduleTask> tasks, int index,
                                SchedulingState state,
                                List<TimeSlot> slots, List<Room> rooms,
                                Map<Integer, Integer> maxHours,
-                               long deadline,
-                               List<ConflictReport> conflicts) {
+                               SearchContext ctx) {
+        if (state.getPlaced().size() > ctx.bestPlaced.size()) {
+            ctx.bestPlaced = new ArrayList<>(state.getPlaced());
+        }
         if (index == tasks.size()) return true;
-        if (System.currentTimeMillis() > deadline) return false;
+        if (ctx.targetClassId > 0) {
+            int freeClassSlots = ctx.totalClassSlots - state.distinctClassSlotsTotal(ctx.targetClassId);
+            if (freeClassSlots < ctx.remWholeClassSlotsSuffix[index]) {
+                ctx.failures++;
+                return false;
+            }
+        }
+        if (System.currentTimeMillis() > ctx.deadline || ctx.failures >= ctx.maxFailures) {
+            return false;
+        }
 
         ScheduleTask task = tasks.get(index);
 
@@ -234,18 +426,18 @@ public class TimetableService {
             List<TimetableEntry> placed = placeTask(task, candidate, state);
             if (placed == null) continue; // constraint violated
 
-            boolean result = backtrack(tasks, index + 1, state, slots, rooms, maxHours, deadline, conflicts);
+            boolean result = backtrack(tasks, index + 1, state, slots, rooms, maxHours, ctx);
             if (result) return true;
 
             // Undo placement
             placed.forEach(state::release);
+
+            if (System.currentTimeMillis() > ctx.deadline || ctx.failures >= ctx.maxFailures) {
+                return false;
+            }
         }
 
-        // Could not place this task
-        conflicts.add(new ConflictReport(
-                task.getSessionType(), task.getSubjectId(), task.getSubjectName(),
-                task.getFacultyId(), "", task.getClassId(), "",
-                "No valid slot/room found", false));
+        ctx.failures++;
         return false;
     }
 
@@ -257,31 +449,24 @@ public class TimetableService {
                                List<TimeSlot> slots, List<Room> rooms,
                                Map<Integer, Integer> maxHours,
                                List<ConflictReport> conflicts) {
-        // Remove already-placed tasks (tracked by subject+class+type combos)
-        Set<String> placedKeys = new HashSet<>();
-        for (TimetableEntry e : state.getPlaced()) {
-            placedKeys.add(e.getSubjectId() + ":" + e.getClassId() + ":"
-                    + e.getSessionType() + ":" + Objects.toString(e.getBatchId(), "null"));
-        }
-
         for (ScheduleTask task : tasks) {
-            String key = task.getSubjectId() + ":" + task.getClassId() + ":"
-                    + task.getSessionType() + ":" + task.getBatchId();
-            // Skip duplicates that were already placed by backtracking
-            // (count how many times this exact task type appears in placed)
-            long alreadyPlaced = state.getPlaced().stream().filter(e ->
+            int alreadyPlacedSlots = (int) state.getPlaced().stream().filter(e ->
                     e.getSubjectId() == task.getSubjectId()
                  && e.getClassId()   == task.getClassId()
+                 && e.getFacultyId() == task.getFacultyId()
                  && e.getSessionType().equals(task.getSessionType())
                  && Objects.equals(e.getBatchId(), task.getBatchId())).count();
 
-            long requiredCount = tasks.stream().filter(t ->
+            int requiredSlots = tasks.stream().filter(t ->
                     t.getSubjectId() == task.getSubjectId()
                  && t.getClassId()   == task.getClassId()
+                 && t.getFacultyId() == task.getFacultyId()
                  && t.getSessionType().equals(task.getSessionType())
-                 && Objects.equals(t.getBatchId(), task.getBatchId())).count();
+                 && Objects.equals(t.getBatchId(), task.getBatchId()))
+                    .mapToInt(ScheduleTask::getRequiredSlots)
+                    .sum();
 
-            if (alreadyPlaced >= requiredCount) continue;
+            if (alreadyPlacedSlots >= requiredSlots) continue;
 
             List<SlotRoomPair> candidates = getCandidates(task, state, slots, rooms, maxHours);
             boolean placed = false;
@@ -293,15 +478,80 @@ public class TimetableService {
                 boolean alreadyConflicted = conflicts.stream().anyMatch(cf ->
                         cf.getSubjectId() == task.getSubjectId()
                      && cf.getClassId()   == task.getClassId()
+                     && cf.getFacultyId() == task.getFacultyId()
                      && cf.getSessionType().equals(task.getSessionType()));
                 if (!alreadyConflicted) {
                     conflicts.add(new ConflictReport(
                             task.getSessionType(), task.getSubjectId(), task.getSubjectName(),
                             task.getFacultyId(), "", task.getClassId(), "",
-                            "Greedy: no valid slot/room found", false));
+                            buildConflictReason(task, state, slots, rooms, maxHours), false));
                 }
             }
         }
+    }
+
+    private String buildConflictReason(ScheduleTask task, SchedulingState state,
+                                       List<TimeSlot> slots, List<Room> rooms,
+                                       Map<Integer, Integer> maxHours) {
+        int assigned = state.facultySessionCount(task.getFacultyId());
+        int max = maxHours.getOrDefault(task.getFacultyId(), 20);
+        if (assigned + task.getRequiredSlots() > max) {
+            return "Faculty weekly hour limit reached (" + assigned + "/" + max
+                    + " hrs used across classes; needs " + task.getRequiredSlots() + " more)";
+        }
+
+        boolean facultyHasSlot = false;
+        boolean facultyAndClassHaveSlot = false;
+        boolean dailyRuleAllowsSlot = false;
+
+        if ("PR".equals(task.getSessionType())) {
+            for (int i = 0; i + 1 < slots.size(); i++) {
+                TimeSlot s1 = slots.get(i);
+                TimeSlot s2 = slots.get(i + 1);
+                if (s1.isBreak() || s2.isBreak()) continue;
+                if (!s1.getDay().equals(s2.getDay()) || s2.getSlotNo() != s1.getSlotNo() + 1) continue;
+                boolean breakBetween = slots.stream().anyMatch(s ->
+                        s.getDay().equals(s1.getDay())
+                     && s.getSlotNo() > s1.getSlotNo()
+                     && s.getSlotNo() < s2.getSlotNo()
+                     && s.isBreak());
+                if (breakBetween) continue;
+                if (!state.isFacultyAvailable(task.getFacultyId(), s1.getSlotId())
+                        || !state.isFacultyAvailable(task.getFacultyId(), s2.getSlotId())) continue;
+                facultyHasSlot = true;
+                if (!state.isClassFree(task.getClassId(), task.getBatchId(), s1.getSlotId())
+                        || !state.isClassFree(task.getClassId(), task.getBatchId(), s2.getSlotId())) continue;
+                facultyAndClassHaveSlot = true;
+                if (state.canScheduleCourseOnDay(task.getSubjectId(), task.getClassId(), s1.getDay(), "PR", 2)
+                        && state.canBatchPerformPracticalOnDay(
+                                task.getClassId(), task.getBatchId(), task.getSubjectId(), s1.getDay())) {
+                    dailyRuleAllowsSlot = true;
+                }
+            }
+        } else {
+            for (TimeSlot s1 : slots) {
+                if (s1.isBreak()) continue;
+                if (!state.isFacultyAvailable(task.getFacultyId(), s1.getSlotId())) continue;
+                facultyHasSlot = true;
+                if (!state.isClassFree(task.getClassId(), task.getBatchId(), s1.getSlotId())) continue;
+                facultyAndClassHaveSlot = true;
+                if (state.canScheduleCourseOnDay(
+                        task.getSubjectId(), task.getClassId(), s1.getDay(), task.getSessionType(), 1)) {
+                    dailyRuleAllowsSlot = true;
+                }
+            }
+        }
+
+        if (!facultyHasSlot) {
+            return "Faculty unavailable or busy in another class/year across all valid slots";
+        }
+        if (!facultyAndClassHaveSlot) {
+            return "No common free slot where both faculty (including other-class duties) and class/batch are free";
+        }
+        if (!dailyRuleAllowsSlot) {
+            return "Daily course or batch practical limit prevents placement in remaining free slots";
+        }
+        return "No active room/lab of sufficient capacity is free in remaining faculty/class slots";
     }
 
     // =========================================================================
@@ -355,6 +605,9 @@ public class TimetableService {
 
                 // Find suitable room: labs for batch practicals; any sufficiently large room/classroom for whole-class practicals
                 boolean batchPractical = task.getBatchId() != null && task.getBatchId() > 0;
+                int freeLabsInWindow = batchPractical
+                        ? countFreeLabs(slot1, slot2, state, rooms, task.getClassStrength())
+                        : 0;
                 for (Room room : rooms) {
                     if (batchPractical && !"LAB".equals(room.getType())) continue;
                     if (!room.isActive()) continue;
@@ -362,7 +615,7 @@ public class TimetableService {
                     if (!state.isRoomFree(room.getRoomId(), slot1.getSlotId())) continue;
                     if (!state.isRoomFree(room.getRoomId(), slot2.getSlotId())) continue;
 
-                    int score = softScore(task, slot1, room, state);
+                    int score = softScore(task, slot1, room, state, freeLabsInWindow);
                     candidates.add(new SlotRoomPair(slot1, slot2, room, score));
                 }
             } else {
@@ -385,7 +638,7 @@ public class TimetableService {
                     if (room.getCapacity() < task.getClassStrength()) continue;
                     if (!state.isRoomFree(room.getRoomId(), slot1.getSlotId())) continue;
 
-                    int score = softScore(task, slot1, room, state);
+                    int score = softScore(task, slot1, room, state, 0);
                     candidates.add(new SlotRoomPair(slot1, null, room, score));
                 }
             }
@@ -396,16 +649,31 @@ public class TimetableService {
         return candidates;
     }
 
+    private static int countFreeLabs(TimeSlot slot1, TimeSlot slot2, SchedulingState state,
+                                     List<Room> rooms, int minCapacity) {
+        int count = 0;
+        for (Room r : rooms) {
+            if ("LAB".equals(r.getType()) && r.isActive() && r.getCapacity() >= minCapacity
+                    && state.isRoomFree(r.getRoomId(), slot1.getSlotId())
+                    && state.isRoomFree(r.getRoomId(), slot2.getSlotId())) {
+                count++;
+            }
+        }
+        return count;
+    }
+
     /**
      * Soft-constraint score. Higher = better placement.
      * <ul>
      *   <li>Preferred room match: Choice 1 = +50, Choice 2 = +40, Choice 3 = +30, Choice 4 = +20, Choice 5 = +10.</li>
      *   <li>+10 if the subject hasn't appeared on this day yet (spread across days).</li>
-     *   <li>+5 if afternoon slot for practicals.</li>
+     *   <li>+15 if afternoon slot for practicals.</li>
+     *   <li>Parallel batch packing and multi-lab window availability for batch PRs.</li>
      *   <li>-10 if more than 2 consecutive sessions would result for the class.</li>
      * </ul>
      */
-    private int softScore(ScheduleTask task, TimeSlot slot, Room room, SchedulingState state) {
+    private int softScore(ScheduleTask task, TimeSlot slot, Room room,
+                          SchedulingState state, int freeLabsInWindow) {
         int score = 50; // baseline
 
         // Preferred room priority scoring
@@ -428,15 +696,33 @@ public class TimetableService {
             score += 15;
         }
 
-        // Balance practical load across days (prevents 4 courses crowding into the same 4 days)
-        // while aligning batches on the same day into the same parallel lab slot window.
+        // For batch practicals, strongly prefer filling existing parallel batch windows first
+        // and opening new batch windows only where multiple labs are free concurrently.
+        boolean batchPr = isBatchPractical(task);
+        int activeBatchesHere = batchPr
+                ? state.batchPracticalCountAtSlot(task.getClassId(), slot.getSlotId())
+                : 0;
+        boolean joiningParallelBatchWindow = activeBatchesHere > 0;
+
         if ("PR".equals(task.getSessionType())) {
-            int prBlocksOnDay = state.practicalEntriesOnDay(task.getClassId(), slot.getDay()) / 2;
-            score -= prBlocksOnDay * 40;
-            if (task.getBatchId() != null && task.getBatchId() > 0
-                    && state.hasBatchPracticalAtSlot(task.getClassId(), slot.getSlotId())) {
-                score += 30;
+            if (joiningParallelBatchWindow) {
+                score += 200 - (activeBatchesHere * 5);
+            } else {
+                if (batchPr) {
+                    if (freeLabsInWindow >= 4) {
+                        score += 60;
+                    } else {
+                        score -= (4 - freeLabsInWindow) * 50;
+                    }
+                }
+                int prWindowsOnDay = state.practicalWindowsOnDay(task.getClassId(), slot.getDay());
+                score -= prWindowsOnDay * 60;
             }
+        }
+
+        // Balance total class sessions across days so remaining free slots stay spread out
+        if (!joiningParallelBatchWindow) {
+            score -= state.distinctClassSlotsOnDay(task.getClassId(), slot.getDay()) * 4;
         }
 
         // Penalise if this would create > 3 consecutive sessions
@@ -525,13 +811,18 @@ public class TimetableService {
             // Clear unlocked entries for this class
             timetableEntryDAO.deleteByClassWithConnection(classId, academicYear, con);
 
-            // Insert all placed entries
+            // Insert newly generated (non-locked) entries
+            int inserted = 0;
             for (TimetableEntry te : entries) {
-                timetableEntryDAO.insertWithConnection(te, con);
+                if (!te.isLocked()) {
+                    timetableEntryDAO.insertWithConnection(te, con);
+                    inserted++;
+                }
             }
 
             con.commit();
-            notifyProgress("Timetable saved to database (" + entries.size() + " entries).");
+            notifyProgress("Timetable saved to database (" + inserted + " generated, "
+                    + (entries.size() - inserted) + " locked preserved).");
         } catch (SQLException e) {
             if (con != null) {
                 try { con.rollback(); } catch (SQLException ignored) {}

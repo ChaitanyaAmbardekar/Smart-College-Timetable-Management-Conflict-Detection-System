@@ -1,8 +1,17 @@
 package in.frcce.ecs.service;
 
+import in.frcce.ecs.model.ConflictReport;
 import in.frcce.ecs.model.FacultySubject;
+import in.frcce.ecs.model.Room;
 import in.frcce.ecs.model.Subject;
+import in.frcce.ecs.model.TimeSlot;
 import in.frcce.ecs.model.TimetableEntry;
+
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * Standalone test runner that validates all hard constraints and clash detection
@@ -27,6 +36,8 @@ public class StandaloneClashTest {
         testDailyCourseLimits();
         testBatchDailyPracticalAndParallelRules();
         testPracticalDeliveryModeModel();
+        testCrossYearFacultyAndRoomAvailability();
+        testCrossYearLabConflictPrevention();
 
         System.out.println("=============================================================");
         System.out.printf("Test Results: %d passed, %d failed%n", passed, failed);
@@ -257,6 +268,160 @@ public class StandaloneClashTest {
         check("Allocation defaults practical mode to BATCH", !fs.isWholeClassPractical());
         fs.setPracMode("WHOLE_CLASS");
         check("Allocation recognizes WHOLE_CLASS practical mode", fs.isWholeClassPractical());
+    }
+
+    private static void testCrossYearFacultyAndRoomAvailability() {
+        SchedulingState state = new SchedulingState();
+
+        // Simulate existing 3rd-year Sem 5 sessions in slots 1 and 2
+        TimetableEntry ty1 = new TimetableEntry();
+        ty1.setClassId(3);
+        ty1.setFacultyId(3);
+        ty1.setRoomId(1);
+        ty1.setSlotId(1);
+        ty1.setDay("MONDAY");
+        ty1.setSessionType("TH");
+        state.preloadOtherClassEntry(ty1);
+
+        TimetableEntry ty2 = new TimetableEntry();
+        ty2.setClassId(3);
+        ty2.setFacultyId(3);
+        ty2.setRoomId(5);
+        ty2.setSlotId(2);
+        ty2.setDay("MONDAY");
+        ty2.setSessionType("PR");
+        state.preloadOtherClassEntry(ty2);
+
+        check("Other-class preload blocks faculty in slot 1", !state.isFacultyAvailable(3, 1));
+        check("Other-class preload blocks room 1 in slot 1", !state.isRoomFree(1, 1));
+        check("Other-class preload leaves target 2nd-year class free in slot 1", state.isClassFree(1, null, 1));
+        check("Other-class preload counts toward faculty weekly hours", state.facultySessionCount(3) == 2);
+        check("Other-class preload does not pollute target class placed entries", state.getPlaced().isEmpty());
+
+        // End-to-end TimetableService.scheduleTasks avoids busy 3rd-year slots 1 & 2
+        List<TimeSlot> slots = List.of(
+                new TimeSlot(1, "MONDAY", "09:00", "10:00", 1, false),
+                new TimeSlot(2, "MONDAY", "10:00", "11:00", 2, false),
+                new TimeSlot(3, "MONDAY", "11:15", "12:15", 3, false),
+                new TimeSlot(4, "TUESDAY", "09:00", "10:00", 1, false)
+        );
+        List<Room> rooms = List.of(
+                new Room(1, "302", "CLASSROOM", 70, "3rd Floor", true),
+                new Room(2, "303", "CLASSROOM", 70, "3rd Floor", true)
+        );
+        List<ScheduleTask> tasks = new ArrayList<>();
+        tasks.add(new ScheduleTask(10, "DBMS", "DBMS", 1, null, 3, "TH", 1, 60, "2026-27", List.of(1)));
+        tasks.add(new ScheduleTask(10, "DBMS", "DBMS", 1, null, 3, "TH", 1, 60, "2026-27", List.of(1)));
+
+        TimetableService service = new TimetableService();
+        List<ConflictReport> conflicts = new ArrayList<>();
+        service.scheduleTasks(tasks, state, slots, rooms, Map.of(3, 4), conflicts);
+
+        check("Cross-year scheduleTasks places both TH sessions without conflicts",
+                conflicts.isEmpty() && state.getPlaced().size() == 2);
+        boolean avoidedBusySlots = state.getPlaced().stream()
+                .noneMatch(e -> e.getSlotId() == 1 || e.getSlotId() == 2);
+        check("Cross-year scheduleTasks avoids faculty 3's busy 3rd-year slots (1 & 2)", avoidedBusySlots);
+
+        // Weekly hour limit with partial retention when external + new hours exceed maxHours
+        SchedulingState tightState = new SchedulingState();
+        tightState.preloadOtherClassEntry(ty1);
+        tightState.preloadOtherClassEntry(ty2); // 2 external hours used
+        List<ScheduleTask> tightTasks = new ArrayList<>();
+        tightTasks.add(new ScheduleTask(10, "DBMS", "DBMS", 1, null, 3, "TH", 1, 60, "2026-27", List.of(1)));
+        tightTasks.add(new ScheduleTask(10, "DBMS", "DBMS", 1, null, 3, "TH", 1, 60, "2026-27", List.of(1)));
+        List<ConflictReport> tightConflicts = new ArrayList<>();
+        service.scheduleTasks(tightTasks, tightState, slots, rooms, Map.of(3, 3), tightConflicts);
+
+        check("Partial best placement keeps 1 placed session instead of wiping all on max-hours limit",
+                tightState.getPlaced().size() == 1);
+        check("Unplaced second session reports weekly hour limit reason",
+                tightConflicts.size() == 1 && tightConflicts.get(0).getReason().contains("weekly hour limit"));
+    }
+
+    private static void testCrossYearLabConflictPrevention() {
+        List<TimeSlot> slots = List.of(
+                new TimeSlot(1, "MONDAY", "08:45:00", "09:45:00", 1, false),
+                new TimeSlot(2, "MONDAY", "09:45:00", "10:45:00", 2, false),
+                new TimeSlot(3, "MONDAY", "10:45:00", "11:00:00", 3, true),
+                new TimeSlot(4, "MONDAY", "11:00:00", "12:00:00", 4, false),
+                new TimeSlot(5, "MONDAY", "12:00:00", "13:00:00", 5, false)
+        );
+        List<Room> labs = List.of(
+                new Room(5, "301", "LAB", 30, "3rd Floor", true),
+                new Room(6, "309", "LAB", 30, "3rd Floor", true),
+                new Room(7, "310", "LAB", 30, "3rd Floor", true),
+                new Room(8, "311", "LAB", 30, "3rd Floor", true),
+                new Room(9, "312", "LAB", 30, "3rd Floor", true)
+        );
+        List<Integer> prefLabs = List.of(5, 6, 7, 8, 9);
+
+        // 1. Preload TE (classId = 3) occupying labs 301, 309, 310, 311 in slots 4 & 5
+        List<TimetableEntry> teLabs = new ArrayList<>();
+        int[] teFacs = {14, 18, 20, 17};
+        for (int b = 0; b < 4; b++) {
+            for (int slotId : new int[]{4, 5}) {
+                TimetableEntry te = new TimetableEntry();
+                te.setClassId(3);
+                te.setBatchId(9 + b);
+                te.setSubjectId(24 + b);
+                te.setFacultyId(teFacs[b]);
+                te.setRoomId(5 + b); // 301..311
+                te.setSlotId(slotId);
+                te.setDay("MONDAY");
+                te.setSlotNo(slotId);
+                te.setSessionType("PR");
+                teLabs.add(te);
+            }
+        }
+
+        SchedulingState seState = new SchedulingState();
+        for (TimetableEntry te : teLabs) seState.preloadOtherClassEntry(te);
+
+        List<ScheduleTask> seTasks = new ArrayList<>();
+        int[] seFacs = {2, 7, 3, 4};
+        for (int b = 0; b < 4; b++) {
+            seTasks.add(new ScheduleTask(1 + b, "SE Lab " + (b + 1), "SL" + (b + 1),
+                    1, 1 + b, seFacs[b], "PR", 2, 16, "2026-27", prefLabs));
+        }
+
+        TimetableService service = new TimetableService();
+        List<ConflictReport> seConflicts = new ArrayList<>();
+        service.scheduleTasks(seTasks, seState, slots, labs,
+                Map.of(2, 20, 7, 20, 3, 20, 4, 20), seConflicts);
+
+        Set<String> teRoomSlots = new HashSet<>();
+        for (TimetableEntry te : teLabs) {
+            teRoomSlots.add(te.getRoomId() + ":" + te.getSlotId());
+        }
+        boolean seNoLabClash = seState.getPlaced().stream()
+                .noneMatch(e -> teRoomSlots.contains(e.getRoomId() + ":" + e.getSlotId()));
+        check("SE lab generation places all 4 parallel batch practicals without conflicts",
+                seConflicts.isEmpty() && seState.getPlaced().size() == 8);
+        check("SE labs never overlap TE labs in same (room, slot)", seNoLabClash);
+
+        // 2. Reverse direction: preload SE in slots 1 & 2, generate TE without lab clashes
+        SchedulingState teState = new SchedulingState();
+        Set<String> seRoomSlots = new HashSet<>();
+        for (TimetableEntry se : seState.getPlaced()) {
+            teState.preloadOtherClassEntry(se);
+            seRoomSlots.add(se.getRoomId() + ":" + se.getSlotId());
+        }
+
+        List<ScheduleTask> teTasks = new ArrayList<>();
+        for (int b = 0; b < 4; b++) {
+            teTasks.add(new ScheduleTask(24 + b, "TE Lab " + (b + 1), "TL" + (b + 1),
+                    3, 9 + b, teFacs[b], "PR", 2, 16, "2026-27", prefLabs));
+        }
+        List<ConflictReport> teConflicts = new ArrayList<>();
+        service.scheduleTasks(teTasks, teState, slots, labs,
+                Map.of(14, 20, 18, 20, 20, 20, 17, 20), teConflicts);
+
+        boolean teNoLabClash = teState.getPlaced().stream()
+                .noneMatch(e -> seRoomSlots.contains(e.getRoomId() + ":" + e.getSlotId()));
+        check("TE lab generation places all 4 parallel batch practicals without conflicts",
+                teConflicts.isEmpty() && teState.getPlaced().size() == 8);
+        check("TE labs never overlap SE labs in same (room, slot)", teNoLabClash);
     }
 
     private static void check(String description, boolean condition) {
