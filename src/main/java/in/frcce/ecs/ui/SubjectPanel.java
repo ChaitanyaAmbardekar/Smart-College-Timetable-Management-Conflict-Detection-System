@@ -19,7 +19,7 @@ public class SubjectPanel extends JPanel implements MainFrame.Refreshable {
     private DefaultTableModel tableModel;
 
     private static final String[] COLS = {
-        "ID", "Course Code", "Name", "Abbr", "Sem", "Type", "TH Hrs", "PR Hrs", "TU Hrs", "Total", "Active"
+        "ID", "Course Code", "Name", "Abbr", "Sem", "Type", "TH Hrs", "PR Hrs", "PR Mode", "TU Hrs", "Total", "Active"
     };
 
     public SubjectPanel() {
@@ -68,9 +68,12 @@ public class SubjectPanel extends JPanel implements MainFrame.Refreshable {
         tableModel.setRowCount(0);
         List<Subject> list = subjectDAO.findAll();
         for (Subject s : list) {
+            String prModeStr = s.getPracticalHrs() > 0
+                    ? (s.isWholeClassPractical() ? "Whole Class" : "In Batches")
+                    : "-";
             tableModel.addRow(new Object[]{
                 s.getSubjectId(), s.getCourseCode(), s.getName(), s.getAbbreviation(),
-                s.getSemester(), s.getType(), s.getTheoryHrs(), s.getPracticalHrs(),
+                s.getSemester(), s.getType(), s.getTheoryHrs(), s.getPracticalHrs(), prModeStr,
                 s.getTutorialHrs(), s.getTotalHours(), s.isActive() ? "Yes" : "No"
             });
         }
@@ -119,6 +122,12 @@ public class SubjectPanel extends JPanel implements MainFrame.Refreshable {
         if (existing != null) typeCombo.setSelectedItem(existing.getType());
         JSpinner thSpin = new JSpinner(new SpinnerNumberModel(existing != null ? existing.getTheoryHrs() : 2, 0, 10, 1));
         JSpinner prSpin = new JSpinner(new SpinnerNumberModel(existing != null ? existing.getPracticalHrs() : 2, 0, 10, 1));
+        JComboBox<String> pracModeCombo = new JComboBox<>(new String[]{"In Batches", "Whole Class"});
+        if (existing != null && existing.isWholeClassPractical()) {
+            pracModeCombo.setSelectedItem("Whole Class");
+        }
+        pracModeCombo.setEnabled(((Integer) prSpin.getValue()) > 0);
+        prSpin.addChangeListener(e -> pracModeCombo.setEnabled(((Integer) prSpin.getValue()) > 0));
         JSpinner tuSpin = new JSpinner(new SpinnerNumberModel(existing != null ? existing.getTutorialHrs() : 0, 0, 10, 1));
 
         g.gridx=0; g.gridy=0; p.add(new JLabel("Course Code:"), g);
@@ -135,8 +144,10 @@ public class SubjectPanel extends JPanel implements MainFrame.Refreshable {
         g.gridx=1; g.gridy=5; p.add(thSpin, g);
         g.gridx=0; g.gridy=6; p.add(new JLabel("Practical Hrs/Wk:"), g);
         g.gridx=1; g.gridy=6; p.add(prSpin, g);
-        g.gridx=0; g.gridy=7; p.add(new JLabel("Tutorial Hrs/Wk:"), g);
-        g.gridx=1; g.gridy=7; p.add(tuSpin, g);
+        g.gridx=0; g.gridy=7; p.add(new JLabel("Practical Mode:"), g);
+        g.gridx=1; g.gridy=7; p.add(pracModeCombo, g);
+        g.gridx=0; g.gridy=8; p.add(new JLabel("Tutorial Hrs/Wk:"), g);
+        g.gridx=1; g.gridy=8; p.add(tuSpin, g);
 
         JButton save = new JButton("Save");
         save.setBackground(new Color(0x1A, 0x73, 0xE8));
@@ -157,6 +168,7 @@ public class SubjectPanel extends JPanel implements MainFrame.Refreshable {
             s.setType((String) typeCombo.getSelectedItem());
             s.setTheoryHrs((Integer) thSpin.getValue());
             s.setPracticalHrs((Integer) prSpin.getValue());
+            s.setPracMode("Whole Class".equals(pracModeCombo.getSelectedItem()) ? "WHOLE_CLASS" : "BATCH");
             s.setTutorialHrs((Integer) tuSpin.getValue());
             s.setActive(true);
 
@@ -166,7 +178,7 @@ public class SubjectPanel extends JPanel implements MainFrame.Refreshable {
             refresh();
         });
 
-        g.gridx=0; g.gridy=8; g.gridwidth=2;
+        g.gridx=0; g.gridy=9; g.gridwidth=2;
         g.insets=new Insets(12, 4, 4, 4);
         p.add(save, g);
 

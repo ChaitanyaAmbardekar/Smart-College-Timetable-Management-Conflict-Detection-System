@@ -120,9 +120,13 @@ public class EditEntryDialog extends JDialog {
         TimetableEntry proposed = new TimetableEntry();
         proposed.setEntryId(entry.getEntryId());
         proposed.setClassId(entry.getClassId());
+        proposed.setBatchId(entry.getBatchId());
+        proposed.setBatchName(entry.getBatchName());
+        proposed.setSubjectId(entry.getSubjectId());
         proposed.setFacultyId(entry.getFacultyId());
         proposed.setRoomId(selectedRoom.getRoom().getRoomId());
         proposed.setSlotId(selectedSlot.getSlot().getSlotId());
+        proposed.setDay(selectedSlot.getSlot().getDay());
         proposed.setSessionType(entry.getSessionType());
 
         // Validate conflicts (ignore conflict with itself)

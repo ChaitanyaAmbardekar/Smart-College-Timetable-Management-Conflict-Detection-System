@@ -1,5 +1,7 @@
 package in.frcce.ecs.service;
 
+import in.frcce.ecs.model.FacultySubject;
+import in.frcce.ecs.model.Subject;
 import in.frcce.ecs.model.TimetableEntry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -156,6 +158,95 @@ public class ClashDetectionTest {
 
         assertEquals(2, state.facultySessionCount(facultyId));
         assertEquals(2, state.consecutiveSessionsFor(classId, "MONDAY", 2));
+    }
+
+    @Test
+    @DisplayName("Hard constraint: Max 1 theory lecture and max 2 practical lectures of the same course per day")
+    void testDailyCourseLimits() {
+        int classId = 1;
+        int subjectId = 1;
+
+        assertTrue(state.canScheduleCourseOnDay(subjectId, classId, "MONDAY", "TH", 1));
+        TimetableEntry th1 = new TimetableEntry();
+        th1.setClassId(classId);
+        th1.setSubjectId(subjectId);
+        th1.setFacultyId(2);
+        th1.setRoomId(1);
+        th1.setSlotId(1);
+        th1.setDay("MONDAY");
+        th1.setSessionType("TH");
+        state.occupy(th1);
+
+        assertFalse(state.canScheduleCourseOnDay(subjectId, classId, "MONDAY", "TH", 1),
+                "Cannot schedule more than 1 theory lecture of the same course on the same day");
+        assertTrue(state.canScheduleCourseOnDay(subjectId, classId, "TUESDAY", "TH", 1));
+
+        assertTrue(state.canScheduleCourseOnDay(subjectId, classId, "MONDAY", "PR", 2));
+        TimetableEntry pr1 = new TimetableEntry();
+        pr1.setClassId(classId);
+        pr1.setSubjectId(subjectId);
+        pr1.setFacultyId(2);
+        pr1.setRoomId(5);
+        pr1.setSlotId(4);
+        pr1.setDay("MONDAY");
+        pr1.setSessionType("PR");
+        state.occupy(pr1);
+
+        TimetableEntry pr2 = new TimetableEntry();
+        pr2.setClassId(classId);
+        pr2.setSubjectId(subjectId);
+        pr2.setFacultyId(2);
+        pr2.setRoomId(5);
+        pr2.setSlotId(5);
+        pr2.setDay("MONDAY");
+        pr2.setSessionType("PR");
+        state.occupy(pr2);
+
+        assertFalse(state.canScheduleCourseOnDay(subjectId, classId, "MONDAY", "PR", 2),
+                "Cannot schedule more than 2 practical lecture slots of the same course on the same day");
+        assertTrue(state.canScheduleCourseOnDay(subjectId, classId, "WEDNESDAY", "PR", 2));
+    }
+
+    @Test
+    @DisplayName("Hard constraint: Each batch can perform practicals for only one course per day and batches may run in parallel slots")
+    void testBatchDailyPracticalAndParallelRules() {
+        int classId = 1;
+
+        TimetableEntry batchAPr = new TimetableEntry();
+        batchAPr.setClassId(classId);
+        batchAPr.setBatchId(1);
+        batchAPr.setSubjectId(1);
+        batchAPr.setFacultyId(2);
+        batchAPr.setRoomId(5);
+        batchAPr.setSlotId(1);
+        batchAPr.setDay("MONDAY");
+        batchAPr.setSessionType("PR");
+        state.occupy(batchAPr);
+
+        assertTrue(state.isClassFree(classId, 2, 1), "Different batch may run in parallel in same slot");
+        assertFalse(state.isClassFree(classId, 1, 1), "Same batch cannot run twice in same slot");
+        assertFalse(state.isClassFree(classId, null, 1), "Whole-class session cannot overlap batch session");
+
+        assertFalse(state.canBatchPerformPracticalOnDay(classId, 1, 2, "MONDAY"),
+                "Batch A cannot perform practical for a second course on MONDAY");
+        assertTrue(state.canBatchPerformPracticalOnDay(classId, 2, 2, "MONDAY"),
+                "Batch B can perform practical for another course on MONDAY");
+        assertTrue(state.canBatchPerformPracticalOnDay(classId, 1, 2, "TUESDAY"),
+                "Batch A can perform practical for another course on TUESDAY");
+    }
+
+    @Test
+    @DisplayName("Model: Subject and allocation support batch vs whole-class practical mode")
+    void testPracticalDeliveryModeModel() {
+        Subject sub = new Subject();
+        assertFalse(sub.isWholeClassPractical());
+        sub.setPracMode("WHOLE_CLASS");
+        assertTrue(sub.isWholeClassPractical());
+
+        FacultySubject fs = new FacultySubject();
+        assertFalse(fs.isWholeClassPractical());
+        fs.setPracMode("WHOLE_CLASS");
+        assertTrue(fs.isWholeClassPractical());
     }
 }
 

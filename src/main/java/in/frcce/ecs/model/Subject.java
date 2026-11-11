@@ -17,6 +17,8 @@ public class Subject {
     private int     theoryHrs;
     private int     practicalHrs;
     private int     tutorialHrs;
+    /** BATCH | WHOLE_CLASS */
+    private String  pracMode = "BATCH";
     private boolean isActive;
 
     // -------------------------------------------------------------------------
@@ -79,6 +81,11 @@ public class Subject {
 
     public int getTutorialHrs() { return tutorialHrs; }
     public void setTutorialHrs(int tutorialHrs) { this.tutorialHrs = tutorialHrs; }
+
+    public String getPracMode() { return pracMode != null ? pracMode : "BATCH"; }
+    public void setPracMode(String pracMode) { this.pracMode = pracMode != null ? pracMode : "BATCH"; }
+
+    public boolean isWholeClassPractical() { return "WHOLE_CLASS".equalsIgnoreCase(getPracMode()); }
 
     public boolean isActive() { return isActive; }
     public void setActive(boolean active) { isActive = active; }

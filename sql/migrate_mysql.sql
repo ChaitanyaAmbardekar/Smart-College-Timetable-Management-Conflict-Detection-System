@@ -37,3 +37,44 @@ WHERE s.course_code = '25CEP12EC01'
   AND fs.class_id = 1
   AND fs.faculty_id = 3
   AND fs.session_type = 'PR';
+
+-- Allow parallel batch practical sessions in the same (class_id, slot_id).
+SET @uq_class_slot_ddl = IF(
+    (SELECT COUNT(*)
+     FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = 'timetable_entry'
+       AND INDEX_NAME = 'uq_class_slot') > 0,
+    'ALTER TABLE timetable_entry ADD UNIQUE KEY uq_class_batch_slot (class_id, batch_id, slot_id, academic_year), DROP INDEX uq_class_slot',
+    'SELECT 1'
+);
+PREPARE uq_class_slot_stmt FROM @uq_class_slot_ddl;
+EXECUTE uq_class_slot_stmt;
+DEALLOCATE PREPARE uq_class_slot_stmt;
+
+-- Add prac_mode ('BATCH' vs 'WHOLE_CLASS') to subject and faculty_subject.
+SET @subj_prac_mode_ddl = IF(
+    (SELECT COUNT(*)
+     FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = 'subject'
+       AND COLUMN_NAME = 'prac_mode') = 0,
+    'ALTER TABLE subject ADD COLUMN prac_mode ENUM(\'BATCH\',\'WHOLE_CLASS\') NOT NULL DEFAULT \'BATCH\' AFTER tutorial_hrs',
+    'SELECT 1'
+);
+PREPARE subj_prac_mode_stmt FROM @subj_prac_mode_ddl;
+EXECUTE subj_prac_mode_stmt;
+DEALLOCATE PREPARE subj_prac_mode_stmt;
+
+SET @fs_prac_mode_ddl = IF(
+    (SELECT COUNT(*)
+     FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = 'faculty_subject'
+       AND COLUMN_NAME = 'prac_mode') = 0,
+    'ALTER TABLE faculty_subject ADD COLUMN prac_mode ENUM(\'BATCH\',\'WHOLE_CLASS\') NOT NULL DEFAULT \'BATCH\' AFTER session_type',
+    'SELECT 1'
+);
+PREPARE fs_prac_mode_stmt FROM @fs_prac_mode_ddl;
+EXECUTE fs_prac_mode_stmt;
+DEALLOCATE PREPARE fs_prac_mode_stmt;

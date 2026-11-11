@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS subject (
     practical_hrs TINYINT UNSIGNED NOT NULL DEFAULT 0,
     tutorial_hrs  TINYINT UNSIGNED NOT NULL DEFAULT 0,
     project_hrs   TINYINT UNSIGNED NOT NULL DEFAULT 0,
+    prac_mode     ENUM('BATCH','WHOLE_CLASS') NOT NULL DEFAULT 'BATCH',
     is_active     BOOLEAN NOT NULL DEFAULT TRUE,
     UNIQUE KEY uq_course_code (course_code),
     INDEX idx_subject_semester (semester)
@@ -125,6 +126,12 @@ CREATE TABLE IF NOT EXISTS faculty_subject (
     subject_id   INT UNSIGNED NOT NULL,
     class_id     INT UNSIGNED NOT NULL,
     session_type ENUM('TH','PR','TU','PJ','ALL') NOT NULL DEFAULT 'ALL',
+    prac_mode    ENUM('BATCH','WHOLE_CLASS') NOT NULL DEFAULT 'BATCH',
+    pref_room1   INT UNSIGNED NULL,
+    pref_room2   INT UNSIGNED NULL,
+    pref_room3   INT UNSIGNED NULL,
+    pref_room4   INT UNSIGNED NULL,
+    pref_room5   INT UNSIGNED NULL,
     UNIQUE KEY uq_faculty_subject_class (faculty_id, subject_id, class_id, session_type),
     INDEX idx_fs_faculty (faculty_id),
     INDEX idx_fs_subject (subject_id),
@@ -163,9 +170,9 @@ CREATE TABLE IF NOT EXISTS timetable_entry (
     academic_year VARCHAR(9)   NOT NULL DEFAULT '2026-27',
     is_locked     BOOLEAN NOT NULL DEFAULT FALSE,
 
-    UNIQUE KEY uq_faculty_slot (faculty_id, slot_id, academic_year),
-    UNIQUE KEY uq_class_slot   (class_id,   slot_id, academic_year),
-    UNIQUE KEY uq_room_slot    (room_id,    slot_id, academic_year),
+    UNIQUE KEY uq_faculty_slot     (faculty_id, slot_id, academic_year),
+    UNIQUE KEY uq_class_batch_slot (class_id,   batch_id, slot_id, academic_year),
+    UNIQUE KEY uq_room_slot        (room_id,    slot_id, academic_year),
 
     INDEX idx_te_class   (class_id),
     INDEX idx_te_faculty (faculty_id),

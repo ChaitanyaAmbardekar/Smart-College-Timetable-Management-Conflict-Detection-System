@@ -2,6 +2,7 @@ package in.frcce.ecs.service;
 
 import in.frcce.ecs.model.*;
 
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -23,12 +24,22 @@ public class ScheduleTask {
     private final Priority    priority;
     private final int         classStrength;
     private final String      academicYear;
+    private final List<Integer> preferredRoomIds;
 
     public ScheduleTask(int subjectId, String subjectName, String subjectAbbr,
                         int classId, Integer batchId,
                         int facultyId, String sessionType,
                         int requiredSlots, int classStrength,
                         String academicYear) {
+        this(subjectId, subjectName, subjectAbbr, classId, batchId, facultyId, sessionType,
+             requiredSlots, classStrength, academicYear, Collections.emptyList());
+    }
+
+    public ScheduleTask(int subjectId, String subjectName, String subjectAbbr,
+                        int classId, Integer batchId,
+                        int facultyId, String sessionType,
+                        int requiredSlots, int classStrength,
+                        String academicYear, List<Integer> preferredRoomIds) {
         this.subjectId     = subjectId;
         this.subjectName   = subjectName;
         this.subjectAbbr   = subjectAbbr;
@@ -39,23 +50,25 @@ public class ScheduleTask {
         this.requiredSlots = requiredSlots;
         this.classStrength = classStrength;
         this.academicYear  = academicYear;
+        this.preferredRoomIds = preferredRoomIds != null ? preferredRoomIds : Collections.emptyList();
         this.priority      = "PR".equals(sessionType) ? Priority.LAB_BLOCK
                            : "TU".equals(sessionType) ? Priority.TUTORIAL
                            : Priority.THEORY;
     }
 
     // Getters
-    public int      getSubjectId()     { return subjectId; }
-    public String   getSubjectName()   { return subjectName; }
-    public String   getSubjectAbbr()   { return subjectAbbr; }
-    public int      getClassId()       { return classId; }
-    public Integer  getBatchId()       { return batchId; }
-    public int      getFacultyId()     { return facultyId; }
-    public String   getSessionType()   { return sessionType; }
-    public int      getRequiredSlots() { return requiredSlots; }
-    public Priority getPriority()      { return priority; }
-    public int      getClassStrength() { return classStrength; }
-    public String   getAcademicYear()  { return academicYear; }
+    public int           getSubjectId()        { return subjectId; }
+    public String        getSubjectName()      { return subjectName; }
+    public String        getSubjectAbbr()      { return subjectAbbr; }
+    public int           getClassId()          { return classId; }
+    public Integer       getBatchId()          { return batchId; }
+    public int           getFacultyId()        { return facultyId; }
+    public String        getSessionType()      { return sessionType; }
+    public int           getRequiredSlots()    { return requiredSlots; }
+    public Priority      getPriority()         { return priority; }
+    public int           getClassStrength()    { return classStrength; }
+    public String        getAcademicYear()     { return academicYear; }
+    public List<Integer> getPreferredRoomIds() { return preferredRoomIds; }
 
     @Override
     public String toString() {

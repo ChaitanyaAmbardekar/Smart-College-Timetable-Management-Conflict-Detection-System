@@ -73,13 +73,30 @@ public class TimetableEntryDAO {
             "SELECT COUNT(*) FROM timetable_entry " +
             "WHERE  faculty_id = ? AND slot_id = ? AND academic_year = ?";
 
+    private static final String SQL_IS_FACULTY_BUSY_EX =
+            "SELECT COUNT(*) FROM timetable_entry " +
+            "WHERE  faculty_id = ? AND slot_id = ? AND academic_year = ? AND entry_id <> ?";
+
     private static final String SQL_IS_CLASS_BUSY =
             "SELECT COUNT(*) FROM timetable_entry " +
             "WHERE  class_id = ? AND slot_id = ? AND academic_year = ?";
 
+    private static final String SQL_IS_CLASS_BUSY_EX =
+            "SELECT COUNT(*) FROM timetable_entry " +
+            "WHERE  class_id = ? AND slot_id = ? AND academic_year = ? AND entry_id <> ?";
+
+    private static final String SQL_IS_BATCH_SLOT_BUSY_EX =
+            "SELECT COUNT(*) FROM timetable_entry " +
+            "WHERE  class_id = ? AND slot_id = ? AND academic_year = ? AND entry_id <> ? " +
+            "AND    (batch_id IS NULL OR batch_id = 0 OR batch_id = ?)";
+
     private static final String SQL_IS_ROOM_BUSY =
             "SELECT COUNT(*) FROM timetable_entry " +
             "WHERE  room_id = ? AND slot_id = ? AND academic_year = ?";
+
+    private static final String SQL_IS_ROOM_BUSY_EX =
+            "SELECT COUNT(*) FROM timetable_entry " +
+            "WHERE  room_id = ? AND slot_id = ? AND academic_year = ? AND entry_id <> ?";
 
     // Write operations
     private static final String SQL_INSERT =
@@ -164,6 +181,10 @@ public class TimetableEntryDAO {
         return countExists(SQL_IS_FACULTY_BUSY, facultyId, slotId, academicYear);
     }
 
+    public boolean isFacultyBusy(int facultyId, int slotId, String academicYear, int excludeEntryId) {
+        return countExistsExcluding(SQL_IS_FACULTY_BUSY_EX, facultyId, slotId, academicYear, excludeEntryId);
+    }
+
     /**
      * @return {@code true} when the class already has an entry in this slot
      *         for the given academic year.
@@ -173,11 +194,65 @@ public class TimetableEntryDAO {
     }
 
     /**
+     * Checks whether a slot is busy for a whole-class entry ({@code batchId == null})
+     * or for a specific practical batch ({@code batchId > 0}), allowing different
+     * batches of the same class to run parallel practicals while blocking whole-class
+     * overlaps or same-batch overlaps.
+     */
+    public boolean isClassOrBatchBusy(int classId, Integer batchId, int slotId,
+                                      String academicYear, int excludeEntryId) {
+        if (batchId == null || batchId <= 0) {
+            return countExistsExcluding(SQL_IS_CLASS_BUSY_EX, classId, slotId, academicYear, excludeEntryId);
+        }
+        Connection con = null;
+        try {
+            con = DBConnection.getInstance().getConnection();
+            try (PreparedStatement ps = con.prepareStatement(SQL_IS_BATCH_SLOT_BUSY_EX)) {
+                ps.setInt(1, classId);
+                ps.setInt(2, slotId);
+                ps.setString(3, academicYear);
+                ps.setInt(4, excludeEntryId);
+                ps.setInt(5, batchId);
+                try (ResultSet rs = ps.executeQuery()) {
+                    return rs.next() && rs.getInt(1) > 0;
+                }
+            }
+        } catch (SQLException e) {
+            throw new RuntimeException("TimetableEntryDAO.isClassOrBatchBusy failed", e);
+        } finally {
+            DBConnection.getInstance().release(con);
+        }
+    }
+
+    /**
      * @return {@code true} when the room already has an entry in this slot
      *         for the given academic year.
      */
     public boolean isRoomBusy(int roomId, int slotId, String academicYear) {
         return countExists(SQL_IS_ROOM_BUSY, roomId, slotId, academicYear);
+    }
+
+    public boolean isRoomBusy(int roomId, int slotId, String academicYear, int excludeEntryId) {
+        return countExistsExcluding(SQL_IS_ROOM_BUSY_EX, roomId, slotId, academicYear, excludeEntryId);
+    }
+
+    /**
+     * Ensures MySQL's {@code timetable_entry} allows parallel batch sessions in the same
+     * {@code (class_id, slot_id)} by upgrading legacy {@code uq_class_slot} to
+     * {@code uq_class_batch_slot} if still present. Safe and idempotent.
+     */
+    public void ensureBatchSlotSchema(Connection con) {
+        String checkSql = "SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS " +
+                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'timetable_entry' AND INDEX_NAME = 'uq_class_slot'";
+        try (Statement st = con.createStatement(); ResultSet rs = st.executeQuery(checkSql)) {
+            if (rs.next() && rs.getInt(1) > 0) {
+                st.execute("ALTER TABLE timetable_entry " +
+                        "ADD UNIQUE KEY uq_class_batch_slot (class_id, batch_id, slot_id, academic_year), " +
+                        "DROP INDEX uq_class_slot");
+            }
+        } catch (SQLException ignored) {
+            // Non-MySQL or already migrated or insufficient DDL permission
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -386,12 +461,34 @@ public class TimetableEntryDAO {
         }
     }
 
+    private boolean countExistsExcluding(String sql, int entityId, int slotId,
+                                         String academicYear, int excludeEntryId) {
+        Connection con = null;
+        try {
+            con = DBConnection.getInstance().getConnection();
+            try (PreparedStatement ps = con.prepareStatement(sql)) {
+                ps.setInt(1, entityId);
+                ps.setInt(2, slotId);
+                ps.setString(3, academicYear);
+                ps.setInt(4, excludeEntryId);
+                try (ResultSet rs = ps.executeQuery()) {
+                    return rs.next() && rs.getInt(1) > 0;
+                }
+            }
+        } catch (SQLException e) {
+            throw new RuntimeException("TimetableEntryDAO.countExistsExcluding failed", e);
+        } finally {
+            DBConnection.getInstance().release(con);
+        }
+    }
+
     /** Maps all columns (FK ids + joined display fields) onto a {@link TimetableEntry}. */
     private TimetableEntry mapRichRow(ResultSet rs) throws SQLException {
         TimetableEntry te = new TimetableEntry();
         te.setEntryId(rs.getInt("entry_id"));
         te.setClassId(rs.getInt("class_id"));
-        te.setBatchId(rs.getInt("batch_id"));           // 0 when NULL (auto-unbox)
+        int batchId = rs.getInt("batch_id");
+        te.setBatchId(rs.wasNull() ? null : batchId);
         te.setSubjectId(rs.getInt("subject_id"));
         te.setFacultyId(rs.getInt("faculty_id"));
         te.setRoomId(rs.getInt("room_id"));

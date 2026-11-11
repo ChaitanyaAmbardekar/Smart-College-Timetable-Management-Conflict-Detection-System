@@ -161,13 +161,21 @@ public class TimetableService {
 
             String type = fs.getSessionType(); // TH, PR, TU, ALL
 
+            // Extract preferred rooms from allocation
+            List<Integer> prefRooms = new ArrayList<>();
+            if (fs.getPrefRoom1() != null) prefRooms.add(fs.getPrefRoom1());
+            if (fs.getPrefRoom2() != null) prefRooms.add(fs.getPrefRoom2());
+            if (fs.getPrefRoom3() != null) prefRooms.add(fs.getPrefRoom3());
+            if (fs.getPrefRoom4() != null) prefRooms.add(fs.getPrefRoom4());
+            if (fs.getPrefRoom5() != null) prefRooms.add(fs.getPrefRoom5());
+
             // Theory sessions
             if (("TH".equals(type) || "ALL".equals(type)) && sub.getTheoryHrs() > 0) {
                 for (int i = 0; i < sub.getTheoryHrs(); i++) {
                     tasks.add(new ScheduleTask(
                             sub.getSubjectId(), sub.getName(), sub.getAbbreviation(),
                             cd.getClassId(), null, fs.getFacultyId(),
-                            "TH", 1, cd.getStrength(), academicYear));
+                            "TH", 1, cd.getStrength(), academicYear, prefRooms));
                 }
             }
 
@@ -177,17 +185,17 @@ public class TimetableService {
                     tasks.add(new ScheduleTask(
                             sub.getSubjectId(), sub.getName(), sub.getAbbreviation(),
                             cd.getClassId(), null, fs.getFacultyId(),
-                            "TU", 1, cd.getStrength(), academicYear));
+                            "TU", 1, cd.getStrength(), academicYear, prefRooms));
                 }
             }
 
-            // Practical sessions — batch-wise, 2 consecutive slots each
+            // Practical sessions — either batch-wise or as a whole class, 2 consecutive slots each
             if (("PR".equals(type) || "ALL".equals(type)) && sub.getPracticalHrs() > 0) {
-                // practicalHrs is the TOTAL hours; each batch gets (practicalHrs) lab slots (1 hour each)
-                // We schedule "practicalHrs / 2" lab blocks per batch (each block = 2 consecutive slots)
                 int blocks = sub.getPracticalHrs() / 2;
                 if (blocks == 0) blocks = 1;
-                List<Batch> useBatches = batches.isEmpty()
+                boolean wholeClassPrac = fs.isWholeClassPractical()
+                        || (fs.getPracMode() == null && sub.isWholeClassPractical());
+                List<Batch> useBatches = (wholeClassPrac || batches.isEmpty())
                         ? List.of(new Batch(0, cd.getClassId(), "ALL", cd.getStrength()))
                         : batches;
                 for (Batch batch : useBatches) {
@@ -196,7 +204,7 @@ public class TimetableService {
                                 sub.getSubjectId(), sub.getName(), sub.getAbbreviation(),
                                 cd.getClassId(), batch.getBatchId() == 0 ? null : batch.getBatchId(),
                                 fs.getFacultyId(), "PR", 2,
-                                batch.getStrength(), academicYear));
+                                batch.getStrength(), academicYear, prefRooms));
                     }
                 }
             }
@@ -325,32 +333,47 @@ public class TimetableService {
                      && s.isBreak());
                 if (breakBetween) continue;
 
-                // Check faculty + class availability for BOTH slots
+                // Enforce daily course limit: max 2 practical lec slots of same course per day
+                if (!state.canScheduleCourseOnDay(task.getSubjectId(), task.getClassId(), slot1.getDay(), "PR", 2)) {
+                    continue;
+                }
+                // Enforce per-batch daily practical limit: each batch can perform practical for only 1 course per day
+                if (!state.canBatchPerformPracticalOnDay(task.getClassId(), task.getBatchId(), task.getSubjectId(), slot1.getDay())) {
+                    continue;
+                }
+
+                // Check faculty + class/batch availability for BOTH slots
                 if (!state.isFacultyAvailable(task.getFacultyId(), slot1.getSlotId())) continue;
                 if (!state.isFacultyAvailable(task.getFacultyId(), slot2.getSlotId())) continue;
-                if (!state.isClassFree(task.getClassId(), slot1.getSlotId())) continue;
-                if (!state.isClassFree(task.getClassId(), slot2.getSlotId())) continue;
+                if (!state.isClassFree(task.getClassId(), task.getBatchId(), slot1.getSlotId())) continue;
+                if (!state.isClassFree(task.getClassId(), task.getBatchId(), slot2.getSlotId())) continue;
 
                 // Faculty max hours check
                 int assigned = state.facultySessionCount(task.getFacultyId());
                 int max = maxHours.getOrDefault(task.getFacultyId(), 20);
                 if (assigned + 2 > max) continue;
 
-                // Find suitable lab
+                // Find suitable room: labs for batch practicals; any sufficiently large room/classroom for whole-class practicals
+                boolean batchPractical = task.getBatchId() != null && task.getBatchId() > 0;
                 for (Room room : rooms) {
-                    if (!"LAB".equals(room.getType())) continue;
+                    if (batchPractical && !"LAB".equals(room.getType())) continue;
                     if (!room.isActive()) continue;
                     if (room.getCapacity() < task.getClassStrength()) continue;
                     if (!state.isRoomFree(room.getRoomId(), slot1.getSlotId())) continue;
                     if (!state.isRoomFree(room.getRoomId(), slot2.getSlotId())) continue;
 
-                    int score = softScore(task, slot1, state);
+                    int score = softScore(task, slot1, room, state);
                     candidates.add(new SlotRoomPair(slot1, slot2, room, score));
                 }
             } else {
+                // Enforce daily course limit: max 1 theory lecture of same course per day
+                if (!state.canScheduleCourseOnDay(task.getSubjectId(), task.getClassId(), slot1.getDay(), task.getSessionType(), 1)) {
+                    continue;
+                }
+
                 // Single slot (TH or TU)
                 if (!state.isFacultyAvailable(task.getFacultyId(), slot1.getSlotId())) continue;
-                if (!state.isClassFree(task.getClassId(), slot1.getSlotId())) continue;
+                if (!state.isClassFree(task.getClassId(), task.getBatchId(), slot1.getSlotId())) continue;
 
                 int assigned = state.facultySessionCount(task.getFacultyId());
                 int max = maxHours.getOrDefault(task.getFacultyId(), 20);
@@ -362,7 +385,7 @@ public class TimetableService {
                     if (room.getCapacity() < task.getClassStrength()) continue;
                     if (!state.isRoomFree(room.getRoomId(), slot1.getSlotId())) continue;
 
-                    int score = softScore(task, slot1, state);
+                    int score = softScore(task, slot1, room, state);
                     candidates.add(new SlotRoomPair(slot1, null, room, score));
                 }
             }
@@ -376,14 +399,24 @@ public class TimetableService {
     /**
      * Soft-constraint score. Higher = better placement.
      * <ul>
+     *   <li>Preferred room match: Choice 1 = +50, Choice 2 = +40, Choice 3 = +30, Choice 4 = +20, Choice 5 = +10.</li>
      *   <li>+10 if the subject hasn't appeared on this day yet (spread across days).</li>
      *   <li>+5 if afternoon slot for practicals.</li>
-     *   <li>-5 if more than 2 consecutive sessions would result for the class.</li>
-     *   <li>+2 for earlier slots (minimize gaps — implicit in ordering).</li>
+     *   <li>-10 if more than 2 consecutive sessions would result for the class.</li>
      * </ul>
      */
-    private int softScore(ScheduleTask task, TimeSlot slot, SchedulingState state) {
+    private int softScore(ScheduleTask task, TimeSlot slot, Room room, SchedulingState state) {
         int score = 50; // baseline
+
+        // Preferred room priority scoring
+        List<Integer> prefs = task.getPreferredRoomIds();
+        if (prefs != null && !prefs.isEmpty()) {
+            int prefIndex = prefs.indexOf(room.getRoomId());
+            if (prefIndex >= 0) {
+                // Choice 0 -> +50, Choice 1 -> +40, Choice 2 -> +30, Choice 3 -> +20, Choice 4 -> +10
+                score += (50 - (prefIndex * 10));
+            }
+        }
 
         // Spread subject across days
         if (state.subjectSessionsOnDay(task.getSubjectId(), task.getClassId(), slot.getDay()) == 0) {
@@ -392,7 +425,18 @@ public class TimetableService {
 
         // Prefer afternoon for practicals (slot_no >= 7 i.e. after lunch)
         if ("PR".equals(task.getSessionType()) && slot.getSlotNo() >= 7) {
-            score += 5;
+            score += 15;
+        }
+
+        // Balance practical load across days (prevents 4 courses crowding into the same 4 days)
+        // while aligning batches on the same day into the same parallel lab slot window.
+        if ("PR".equals(task.getSessionType())) {
+            int prBlocksOnDay = state.practicalEntriesOnDay(task.getClassId(), slot.getDay()) / 2;
+            score -= prBlocksOnDay * 40;
+            if (task.getBatchId() != null && task.getBatchId() > 0
+                    && state.hasBatchPracticalAtSlot(task.getClassId(), slot.getSlotId())) {
+                score += 30;
+            }
         }
 
         // Penalise if this would create > 3 consecutive sessions
@@ -419,8 +463,13 @@ public class TimetableService {
 
         // Final double-check constraints (state may have changed since candidates were scored)
         if (!state.isFacultyAvailable(task.getFacultyId(), e1.getSlotId())) return null;
-        if (!state.isClassFree(task.getClassId(), e1.getSlotId())) return null;
+        if (!state.isClassFree(task.getClassId(), task.getBatchId(), e1.getSlotId())) return null;
         if (!state.isRoomFree(e1.getRoomId(), e1.getSlotId())) return null;
+        if (!state.canScheduleCourseOnDay(task.getSubjectId(), task.getClassId(),
+                e1.getDay(), task.getSessionType(), task.getRequiredSlots())) return null;
+        if ("PR".equals(task.getSessionType())
+                && !state.canBatchPerformPracticalOnDay(task.getClassId(), task.getBatchId(),
+                task.getSubjectId(), e1.getDay())) return null;
 
         entries.add(e1);
         state.occupy(e1);
@@ -428,7 +477,7 @@ public class TimetableService {
         if ("PR".equals(task.getSessionType()) && candidate.getSlot2() != null) {
             TimetableEntry e2 = buildEntry(task, candidate.getSlot2(), candidate.getRoom());
             if (!state.isFacultyAvailable(task.getFacultyId(), e2.getSlotId())
-             || !state.isClassFree(task.getClassId(), e2.getSlotId())
+             || !state.isClassFree(task.getClassId(), task.getBatchId(), e2.getSlotId())
              || !state.isRoomFree(e2.getRoomId(), e2.getSlotId())) {
                 // Undo e1
                 state.release(e1);
@@ -470,6 +519,7 @@ public class TimetableService {
         Connection con = null;
         try {
             con = DBConnection.getInstance().getConnection();
+            timetableEntryDAO.ensureBatchSlotSchema(con);
             con.setAutoCommit(false);
 
             // Clear unlocked entries for this class
@@ -505,14 +555,16 @@ public class TimetableService {
      */
     public List<String> checkConflicts(TimetableEntry proposed, String academicYear) {
         List<String> clashes = new ArrayList<>();
+        int excludeId = proposed.getEntryId();
 
-        if (timetableEntryDAO.isFacultyBusy(proposed.getFacultyId(), proposed.getSlotId(), academicYear)) {
+        if (timetableEntryDAO.isFacultyBusy(proposed.getFacultyId(), proposed.getSlotId(), academicYear, excludeId)) {
             clashes.add("Faculty is already assigned to another session in this slot.");
         }
-        if (timetableEntryDAO.isClassBusy(proposed.getClassId(), proposed.getSlotId(), academicYear)) {
-            clashes.add("This class already has a session in the selected slot.");
+        if (timetableEntryDAO.isClassOrBatchBusy(proposed.getClassId(), proposed.getBatchId(),
+                proposed.getSlotId(), academicYear, excludeId)) {
+            clashes.add("This class or batch already has a session in the selected slot.");
         }
-        if (timetableEntryDAO.isRoomBusy(proposed.getRoomId(), proposed.getSlotId(), academicYear)) {
+        if (timetableEntryDAO.isRoomBusy(proposed.getRoomId(), proposed.getSlotId(), academicYear, excludeId)) {
             clashes.add("Room is already in use in the selected slot.");
         }
         // Check faculty unavailability
@@ -521,6 +573,48 @@ public class TimetableService {
                 .anyMatch(u -> u.getSlotId() == proposed.getSlotId());
         if (isUnavailable) {
             clashes.add("Faculty has marked this slot as unavailable.");
+        }
+
+        // Enforce daily course limits (max 1 TH, max 2 PR of the same course per day)
+        // and per-batch daily practical limit (each batch can perform PR for only 1 course per day)
+        String targetDay = proposed.getDay();
+        if (targetDay == null) {
+            targetDay = timeSlotDAO.findAllIncBreaks().stream()
+                    .filter(ts -> ts.getSlotId() == proposed.getSlotId())
+                    .map(TimeSlot::getDay)
+                    .findFirst()
+                    .orElse(null);
+        }
+        if (targetDay != null && proposed.getSubjectId() > 0) {
+            final String dayToCheck = targetDay;
+            List<TimetableEntry> classEntries = timetableEntryDAO.findByClass(proposed.getClassId(), academicYear);
+            long sameCourseOnDay = classEntries.stream()
+                    .filter(e -> e.getEntryId() != proposed.getEntryId())
+                    .filter(e -> e.getSubjectId() == proposed.getSubjectId())
+                    .filter(e -> dayToCheck.equalsIgnoreCase(e.getDay()))
+                    .filter(e -> proposed.getSessionType().equalsIgnoreCase(e.getSessionType()))
+                    .count();
+            if ("TH".equalsIgnoreCase(proposed.getSessionType()) && sameCourseOnDay >= 1) {
+                clashes.add("Cannot schedule more than 1 theory lecture of the same course on " + dayToCheck + ".");
+            } else if ("PR".equalsIgnoreCase(proposed.getSessionType()) && sameCourseOnDay >= 2) {
+                clashes.add("Cannot schedule more than 2 practical lectures of the same course on " + dayToCheck + ".");
+            }
+
+            if ("PR".equalsIgnoreCase(proposed.getSessionType())
+                    && proposed.getBatchId() != null && proposed.getBatchId() > 0) {
+                boolean batchHasOtherCoursePR = classEntries.stream()
+                        .filter(e -> e.getEntryId() != proposed.getEntryId())
+                        .filter(e -> Objects.equals(e.getBatchId(), proposed.getBatchId()))
+                        .filter(e -> dayToCheck.equalsIgnoreCase(e.getDay()))
+                        .filter(e -> "PR".equalsIgnoreCase(e.getSessionType()))
+                        .anyMatch(e -> e.getSubjectId() != proposed.getSubjectId());
+                if (batchHasOtherCoursePR) {
+                    String batchLabel = proposed.getBatchName() != null && !proposed.getBatchName().isEmpty()
+                            ? "Batch " + proposed.getBatchName() : "This batch";
+                    clashes.add(batchLabel + " can perform practical for only one course per day ("
+                            + dayToCheck + " already has another practical course).");
+                }
+            }
         }
         return clashes;
     }

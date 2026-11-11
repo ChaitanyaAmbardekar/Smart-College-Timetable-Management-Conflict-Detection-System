@@ -103,22 +103,19 @@ ON DUPLICATE KEY UPDATE
     practical_hrs = VALUES(practical_hrs), tutorial_hrs = VALUES(tutorial_hrs);
 
 -- ---------------------------------------------------------------------------
--- ROOMS (based on typical FrCRCE layout; Room 307 confirmed from timetable)
+-- ROOMS (Classrooms: 302, 303, 306, 307; Labs: 301, 309, 310, 311, 312)
 -- ---------------------------------------------------------------------------
 INSERT INTO room (room_id, name, type, capacity, location) VALUES
-(1,  '307',         'CLASSROOM',    65,  'Third Floor, Main Building'),
-(2,  '308',         'CLASSROOM',    65,  'Third Floor, Main Building'),
-(3,  '309',         'CLASSROOM',    65,  'Third Floor, Main Building'),
-(4,  '310',         'CLASSROOM',    65,  'Third Floor, Main Building'),
-(5,  'ECS Lab 1',   'LAB',          30,  'Ground Floor, ECS Wing'),
-(6,  'ECS Lab 2',   'LAB',          30,  'Ground Floor, ECS Wing'),
-(7,  'Computer Lab 1','LAB',        30,  'First Floor, Computer Wing'),
-(8,  'Computer Lab 2','LAB',        30,  'First Floor, Computer Wing'),
-(9,  'Electronics Lab 1','LAB',     30,  'Second Floor, Electronics Wing'),
-(10, 'Electronics Lab 2','LAB',     30,  'Second Floor, Electronics Wing'),
-(11, 'Tutorial Room 1','TUTORIAL_ROOM', 30, 'Second Floor, Main Building'),
-(12, 'Seminar Hall', 'SEMINAR_HALL', 120, 'Ground Floor, Main Building')
-ON DUPLICATE KEY UPDATE name = VALUES(name), capacity = VALUES(capacity);
+(1,  '302', 'CLASSROOM', 65, 'Third Floor'),
+(2,  '303', 'CLASSROOM', 65, 'Third Floor'),
+(3,  '306', 'CLASSROOM', 65, 'Third Floor'),
+(4,  '307', 'CLASSROOM', 65, 'Third Floor'),
+(5,  '301', 'LAB',       30, 'Third Floor'),
+(6,  '309', 'LAB',       30, 'Third Floor'),
+(7,  '310', 'LAB',       30, 'Third Floor'),
+(8,  '311', 'LAB',       30, 'Third Floor'),
+(9,  '312', 'LAB',       30, 'Third Floor')
+ON DUPLICATE KEY UPDATE name = VALUES(name), type = VALUES(type), capacity = VALUES(capacity);
 
 -- ---------------------------------------------------------------------------
 -- TIME SLOTS (Mon–Sat, 8:45 AM – 4:30 PM; matching the real timetable)

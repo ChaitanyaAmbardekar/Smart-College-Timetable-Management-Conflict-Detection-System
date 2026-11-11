@@ -1,5 +1,7 @@
 package in.frcce.ecs.service;
 
+import in.frcce.ecs.model.FacultySubject;
+import in.frcce.ecs.model.Subject;
 import in.frcce.ecs.model.TimetableEntry;
 
 /**
@@ -22,6 +24,9 @@ public class StandaloneClashTest {
         testFacultyUnavailability();
         testReleaseRestoresAvailability();
         testWorkloadAndConsecutiveSessions();
+        testDailyCourseLimits();
+        testBatchDailyPracticalAndParallelRules();
+        testPracticalDeliveryModeModel();
 
         System.out.println("=============================================================");
         System.out.printf("Test Results: %d passed, %d failed%n", passed, failed);
@@ -152,6 +157,106 @@ public class StandaloneClashTest {
 
         check("Faculty session count updated to 2", state.facultySessionCount(facultyId) == 2);
         check("Consecutive session count detected as 2", state.consecutiveSessionsFor(classId, "MONDAY", 2) == 2);
+    }
+
+    private static void testDailyCourseLimits() {
+        SchedulingState state = new SchedulingState();
+        int classId = 1;
+        int subjectId = 1; // EDA
+
+        // Theory limit: max 1 TH per day
+        check("Initially allows 1st TH on MONDAY", state.canScheduleCourseOnDay(subjectId, classId, "MONDAY", "TH", 1));
+        TimetableEntry th1 = new TimetableEntry();
+        th1.setClassId(classId);
+        th1.setSubjectId(subjectId);
+        th1.setFacultyId(2);
+        th1.setRoomId(1);
+        th1.setSlotId(1);
+        th1.setDay("MONDAY");
+        th1.setSessionType("TH");
+        state.occupy(th1);
+
+        check("Blocks 2nd TH of same course on MONDAY", !state.canScheduleCourseOnDay(subjectId, classId, "MONDAY", "TH", 1));
+        check("Allows TH of same course on TUESDAY", state.canScheduleCourseOnDay(subjectId, classId, "TUESDAY", "TH", 1));
+
+        // Practical limit: max 2 PR slots per day
+        check("Initially allows 2-slot PR block on MONDAY", state.canScheduleCourseOnDay(subjectId, classId, "MONDAY", "PR", 2));
+        TimetableEntry pr1 = new TimetableEntry();
+        pr1.setClassId(classId);
+        pr1.setSubjectId(subjectId);
+        pr1.setFacultyId(2);
+        pr1.setRoomId(5);
+        pr1.setSlotId(4);
+        pr1.setDay("MONDAY");
+        pr1.setSessionType("PR");
+        state.occupy(pr1);
+
+        TimetableEntry pr2 = new TimetableEntry();
+        pr2.setClassId(classId);
+        pr2.setSubjectId(subjectId);
+        pr2.setFacultyId(2);
+        pr2.setRoomId(5);
+        pr2.setSlotId(5);
+        pr2.setDay("MONDAY");
+        pr2.setSessionType("PR");
+        state.occupy(pr2);
+
+        check("Blocks additional PR block (>2 PR slots) of same course on MONDAY", !state.canScheduleCourseOnDay(subjectId, classId, "MONDAY", "PR", 2));
+        check("Allows PR block of same course on WEDNESDAY", state.canScheduleCourseOnDay(subjectId, classId, "WEDNESDAY", "PR", 2));
+    }
+
+    private static void testBatchDailyPracticalAndParallelRules() {
+        SchedulingState state = new SchedulingState();
+        int classId = 1;
+
+        TimetableEntry batchAPr = new TimetableEntry();
+        batchAPr.setClassId(classId);
+        batchAPr.setBatchId(1); // Batch A
+        batchAPr.setSubjectId(1); // EDA
+        batchAPr.setFacultyId(2);
+        batchAPr.setRoomId(5);
+        batchAPr.setSlotId(1);
+        batchAPr.setDay("MONDAY");
+        batchAPr.setSessionType("PR");
+        state.occupy(batchAPr);
+
+        check("Parallel Batch B allowed in same slot", state.isClassFree(classId, 2, 1));
+        check("Same Batch A blocked in same slot", !state.isClassFree(classId, 1, 1));
+        check("Whole-class TH blocked in batch PR slot", !state.isClassFree(classId, null, 1));
+        check("Batch A blocked from 2nd PR course on MONDAY",
+                !state.canBatchPerformPracticalOnDay(classId, 1, 2, "MONDAY"));
+        check("Batch B allowed to perform PR for COA on MONDAY",
+                state.canBatchPerformPracticalOnDay(classId, 2, 2, "MONDAY"));
+        check("Batch A allowed to perform PR for COA on TUESDAY",
+                state.canBatchPerformPracticalOnDay(classId, 1, 2, "TUESDAY"));
+
+        TimetableEntry batchBPr = new TimetableEntry();
+        batchBPr.setClassId(classId);
+        batchBPr.setBatchId(2); // Batch B
+        batchBPr.setSubjectId(2); // COA
+        batchBPr.setFacultyId(7);
+        batchBPr.setRoomId(6);
+        batchBPr.setSlotId(1);
+        batchBPr.setDay("MONDAY");
+        batchBPr.setSessionType("PR");
+        state.occupy(batchBPr);
+
+        check("Same Batch B now blocked in same slot", !state.isClassFree(classId, 2, 1));
+        state.release(batchBPr);
+        check("Releasing Batch B frees Batch B slot while Batch A stays occupied",
+                state.isClassFree(classId, 2, 1) && !state.isClassFree(classId, null, 1));
+    }
+
+    private static void testPracticalDeliveryModeModel() {
+        Subject sub = new Subject();
+        check("Subject defaults practical mode to BATCH", !sub.isWholeClassPractical());
+        sub.setPracMode("WHOLE_CLASS");
+        check("Subject recognizes WHOLE_CLASS practical mode", sub.isWholeClassPractical());
+
+        FacultySubject fs = new FacultySubject();
+        check("Allocation defaults practical mode to BATCH", !fs.isWholeClassPractical());
+        fs.setPracMode("WHOLE_CLASS");
+        check("Allocation recognizes WHOLE_CLASS practical mode", fs.isWholeClassPractical());
     }
 
     private static void check(String description, boolean condition) {

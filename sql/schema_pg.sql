@@ -58,6 +58,7 @@ CREATE TABLE subject (
     practical_hrs SMALLINT     NOT NULL DEFAULT 0,
     tutorial_hrs  SMALLINT     NOT NULL DEFAULT 0,
     project_hrs   SMALLINT     NOT NULL DEFAULT 0 CHECK (project_hrs >= 0),
+    prac_mode     VARCHAR(15)  NOT NULL DEFAULT 'BATCH' CHECK (prac_mode IN ('BATCH','WHOLE_CLASS')),
     is_active     BOOLEAN      NOT NULL DEFAULT TRUE
 );
 
@@ -130,6 +131,7 @@ CREATE TABLE faculty_subject (
     subject_id   INT         NOT NULL REFERENCES subject(subject_id) ON UPDATE CASCADE ON DELETE CASCADE,
     class_id     INT         NOT NULL REFERENCES class_division(class_id) ON UPDATE CASCADE ON DELETE CASCADE,
     session_type VARCHAR(10) NOT NULL DEFAULT 'ALL' CHECK (session_type IN ('TH','PR','TU','PJ','ALL')),
+    prac_mode    VARCHAR(15) NOT NULL DEFAULT 'BATCH' CHECK (prac_mode IN ('BATCH','WHOLE_CLASS')),
     CONSTRAINT uq_faculty_subject_class UNIQUE (faculty_id, subject_id, class_id, session_type)
 );
 
@@ -165,9 +167,9 @@ CREATE TABLE timetable_entry (
     academic_year VARCHAR(9)  NOT NULL DEFAULT '2026-27',
     is_locked     BOOLEAN     NOT NULL DEFAULT FALSE,
 
-    CONSTRAINT uq_faculty_slot UNIQUE (faculty_id, slot_id, academic_year),
-    CONSTRAINT uq_class_slot   UNIQUE (class_id,   slot_id, academic_year),
-    CONSTRAINT uq_room_slot    UNIQUE (room_id,    slot_id, academic_year)
+    CONSTRAINT uq_faculty_slot     UNIQUE (faculty_id, slot_id, academic_year),
+    CONSTRAINT uq_class_batch_slot UNIQUE (class_id,   batch_id, slot_id, academic_year),
+    CONSTRAINT uq_room_slot        UNIQUE (room_id,    slot_id, academic_year)
 );
 
 CREATE INDEX idx_te_class     ON timetable_entry(class_id);

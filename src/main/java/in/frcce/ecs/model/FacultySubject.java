@@ -17,6 +17,15 @@ public class FacultySubject {
     private int    classId;
     /** TH | PR | TU | ALL */
     private String sessionType;
+    /** BATCH | WHOLE_CLASS (applies when practicals are included) */
+    private String pracMode = "BATCH";
+
+    // Preferred 5 choices of classroom/lab
+    private Integer prefRoom1;
+    private Integer prefRoom2;
+    private Integer prefRoom3;
+    private Integer prefRoom4;
+    private Integer prefRoom5;
 
     // -------------------------------------------------------------------------
     // Display fields (populated via JOINs / view queries)
@@ -70,6 +79,26 @@ public class FacultySubject {
 
     public String getSessionType() { return sessionType; }
     public void setSessionType(String sessionType) { this.sessionType = sessionType; }
+
+    public String getPracMode() { return pracMode != null ? pracMode : "BATCH"; }
+    public void setPracMode(String pracMode) { this.pracMode = pracMode != null ? pracMode : "BATCH"; }
+
+    public boolean isWholeClassPractical() { return "WHOLE_CLASS".equalsIgnoreCase(getPracMode()); }
+
+    public Integer getPrefRoom1() { return prefRoom1; }
+    public void setPrefRoom1(Integer prefRoom1) { this.prefRoom1 = prefRoom1; }
+
+    public Integer getPrefRoom2() { return prefRoom2; }
+    public void setPrefRoom2(Integer prefRoom2) { this.prefRoom2 = prefRoom2; }
+
+    public Integer getPrefRoom3() { return prefRoom3; }
+    public void setPrefRoom3(Integer prefRoom3) { this.prefRoom3 = prefRoom3; }
+
+    public Integer getPrefRoom4() { return prefRoom4; }
+    public void setPrefRoom4(Integer prefRoom4) { this.prefRoom4 = prefRoom4; }
+
+    public Integer getPrefRoom5() { return prefRoom5; }
+    public void setPrefRoom5(Integer prefRoom5) { this.prefRoom5 = prefRoom5; }
 
     // -------------------------------------------------------------------------
     // Getters & Setters — display fields

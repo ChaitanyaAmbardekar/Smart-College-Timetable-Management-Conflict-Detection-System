@@ -113,20 +113,15 @@ public class SeedDataSchedulingTest {
         };
         addTheory.run();
 
-        // Practicals (2 consecutive slots each)
-        // EDA lab (DVB)
-        tasks.add(new ScheduleTask(1, "Electronic Devices and Applications Lab", "EDA", classId, 1, 2, "PR", 2, 20, ay));
-        // COA lab (KR)
-        tasks.add(new ScheduleTask(2, "Computer Organization Lab", "COA", classId, 2, 7, "PR", 2, 20, ay));
-        // DBMS lab (VVG)
-        tasks.add(new ScheduleTask(3, "Database Management System Lab", "DBMS", classId, 3, 3, "PR", 2, 20, ay));
-        // OOPJ lab (AL)
-        tasks.add(new ScheduleTask(4, "OOP with JAVA Lab", "OOPJ", classId, 4, 4, "PR", 2, 20, ay));
-        // HVPE practical (AP)
-        tasks.add(new ScheduleTask(10, "HVPE Practical", "HVPE", classId, 1, 5, "PR", 2, 20, ay));
-        // CEP Project hours (VVG)
-        tasks.add(new ScheduleTask(11, "Community Engagement Project", "CEP", classId, 1, 3, "PR", 2, 20, ay));
-        tasks.add(new ScheduleTask(11, "Community Engagement Project", "CEP", classId, 2, 3, "PR", 2, 20, ay));
+        // Batch Practicals (2 consecutive slots each, 4 batches per practical course: A=1, B=2, C=3, D=4)
+        for (int batchId = 1; batchId <= 4; batchId++) {
+            tasks.add(new ScheduleTask(1, "Electronic Devices and Applications Lab", "EDA", classId, batchId, 2, "PR", 2, 16, ay));
+            tasks.add(new ScheduleTask(2, "Computer Organization Lab", "COA", classId, batchId, 7, "PR", 2, 16, ay));
+            tasks.add(new ScheduleTask(3, "Database Management System Lab", "DBMS", classId, batchId, 3, "PR", 2, 16, ay));
+            tasks.add(new ScheduleTask(4, "OOP with JAVA Lab", "OOPJ", classId, batchId, 4, "PR", 2, 16, ay));
+        }
+        // Whole-class Practical (e.g., HVPE taken as whole class rather than in batches)
+        tasks.add(new ScheduleTask(10, "HVPE Practical", "HVPE", classId, null, 5, "PR", 2, classStrength, ay));
 
         System.out.printf("Total sessions to schedule: %d%n", tasks.size());
 
@@ -141,7 +136,12 @@ public class SeedDataSchedulingTest {
         for (ScheduleTask task : tasks) {
             boolean placed = false;
             if ("PR".equals(task.getSessionType())) {
-                // Find 2 consecutive active slots
+                // Find best consecutive active slot pair (preferring aligned parallel batch windows)
+                TimeSlot bestS1 = null;
+                TimeSlot bestS2 = null;
+                Room bestLab = null;
+                int bestScore = Integer.MIN_VALUE;
+
                 for (int i = 0; i < allSlots.size() - 1; i++) {
                     TimeSlot s1 = allSlots.get(i);
                     TimeSlot s2 = allSlots.get(i + 1);
@@ -149,48 +149,68 @@ public class SeedDataSchedulingTest {
                     if (!s1.getDay().equals(s2.getDay())) continue;
                     if (s2.getSlotNo() != s1.getSlotNo() + 1) continue;
 
+                    if (!state.canScheduleCourseOnDay(task.getSubjectId(), task.getClassId(), s1.getDay(), "PR", 2)) continue;
+                    if (!state.canBatchPerformPracticalOnDay(task.getClassId(), task.getBatchId(), task.getSubjectId(), s1.getDay())) continue;
+
                     if (!state.isFacultyAvailable(task.getFacultyId(), s1.getSlotId())) continue;
                     if (!state.isFacultyAvailable(task.getFacultyId(), s2.getSlotId())) continue;
-                    if (!state.isClassFree(task.getClassId(), s1.getSlotId())) continue;
-                    if (!state.isClassFree(task.getClassId(), s2.getSlotId())) continue;
+                    if (!state.isClassFree(task.getClassId(), task.getBatchId(), s1.getSlotId())) continue;
+                    if (!state.isClassFree(task.getClassId(), task.getBatchId(), s2.getSlotId())) continue;
 
-                    // Find lab room
-                    Room lab = rooms.stream().filter(r -> "LAB".equals(r.getType())
+                    // Find suitable room (lab for batch PR, any room with sufficient capacity for whole-class PR)
+                    boolean batchPractical = task.getBatchId() != null && task.getBatchId() > 0;
+                    Room lab = rooms.stream().filter(r -> (!batchPractical || "LAB".equals(r.getType()))
+                            && r.getCapacity() >= task.getClassStrength()
                             && state.isRoomFree(r.getRoomId(), s1.getSlotId())
                             && state.isRoomFree(r.getRoomId(), s2.getSlotId())).findFirst().orElse(null);
 
                     if (lab != null) {
-                        TimetableEntry e1 = new TimetableEntry();
-                        e1.setClassId(task.getClassId());
-                        e1.setFacultyId(task.getFacultyId());
-                        e1.setRoomId(lab.getRoomId());
-                        e1.setSlotId(s1.getSlotId());
-                        e1.setDay(s1.getDay());
-                        e1.setSlotNo(s1.getSlotNo());
-                        e1.setSubjectId(task.getSubjectId());
-                        e1.setSessionType("PR");
-
-                        TimetableEntry e2 = new TimetableEntry();
-                        e2.setClassId(task.getClassId());
-                        e2.setFacultyId(task.getFacultyId());
-                        e2.setRoomId(lab.getRoomId());
-                        e2.setSlotId(s2.getSlotId());
-                        e2.setDay(s2.getDay());
-                        e2.setSlotNo(s2.getSlotNo());
-                        e2.setSubjectId(task.getSubjectId());
-                        e2.setSessionType("PR");
-
-                        state.occupy(e1);
-                        state.occupy(e2);
-                        placed = true;
-                        break;
+                        int prBlocksOnDay = state.practicalEntriesOnDay(task.getClassId(), s1.getDay()) / 2;
+                        int score = -(prBlocksOnDay * 40);
+                        if (state.hasBatchPracticalAtSlot(task.getClassId(), s1.getSlotId())) score += 30;
+                        if (s1.getSlotNo() >= 7) score += 15;
+                        if (score > bestScore) {
+                            bestScore = score;
+                            bestS1 = s1;
+                            bestS2 = s2;
+                            bestLab = lab;
+                        }
                     }
+                }
+
+                if (bestLab != null) {
+                    TimetableEntry e1 = new TimetableEntry();
+                    e1.setClassId(task.getClassId());
+                    e1.setBatchId(task.getBatchId());
+                    e1.setFacultyId(task.getFacultyId());
+                    e1.setRoomId(bestLab.getRoomId());
+                    e1.setSlotId(bestS1.getSlotId());
+                    e1.setDay(bestS1.getDay());
+                    e1.setSlotNo(bestS1.getSlotNo());
+                    e1.setSubjectId(task.getSubjectId());
+                    e1.setSessionType("PR");
+
+                    TimetableEntry e2 = new TimetableEntry();
+                    e2.setClassId(task.getClassId());
+                    e2.setBatchId(task.getBatchId());
+                    e2.setFacultyId(task.getFacultyId());
+                    e2.setRoomId(bestLab.getRoomId());
+                    e2.setSlotId(bestS2.getSlotId());
+                    e2.setDay(bestS2.getDay());
+                    e2.setSlotNo(bestS2.getSlotNo());
+                    e2.setSubjectId(task.getSubjectId());
+                    e2.setSessionType("PR");
+
+                    state.occupy(e1);
+                    state.occupy(e2);
+                    placed = true;
                 }
             } else {
                 // Single theory slot
                 for (TimeSlot s1 : activeSlots) {
+                    if (!state.canScheduleCourseOnDay(task.getSubjectId(), task.getClassId(), s1.getDay(), "TH", 1)) continue;
                     if (!state.isFacultyAvailable(task.getFacultyId(), s1.getSlotId())) continue;
-                    if (!state.isClassFree(task.getClassId(), s1.getSlotId())) continue;
+                    if (!state.isClassFree(task.getClassId(), task.getBatchId(), s1.getSlotId())) continue;
 
                     Room cr = rooms.stream().filter(r -> "CLASSROOM".equals(r.getType())
                             && state.isRoomFree(r.getRoomId(), s1.getSlotId())).findFirst().orElse(null);
@@ -198,6 +218,7 @@ public class SeedDataSchedulingTest {
                     if (cr != null) {
                         TimetableEntry e1 = new TimetableEntry();
                         e1.setClassId(task.getClassId());
+                        e1.setBatchId(task.getBatchId());
                         e1.setFacultyId(task.getFacultyId());
                         e1.setRoomId(cr.getRoomId());
                         e1.setSlotId(s1.getSlotId());
@@ -217,7 +238,8 @@ public class SeedDataSchedulingTest {
                 placedCount++;
             } else {
                 failedCount++;
-                System.err.printf("  [CONFLICT] Could not place task: %s (%s)%n", task.getSubjectAbbr(), task.getSessionType());
+                System.err.printf("  [CONFLICT] Could not place task: %s (%s) batch=%s%n",
+                        task.getSubjectAbbr(), task.getSessionType(), task.getBatchId());
             }
         }
 
@@ -227,26 +249,60 @@ public class SeedDataSchedulingTest {
         // 6. Assertions for zero clashes
         System.out.println("\nChecking constraints on generated timetable:");
         Set<String> facultySlotCheck = new HashSet<>();
-        Set<String> classSlotCheck = new HashSet<>();
+        Set<String> wholeClassSlotCheck = new HashSet<>();
+        Set<String> anyClassSlotCheck = new HashSet<>();
+        Set<String> batchSlotCheck = new HashSet<>();
         Set<String> roomSlotCheck = new HashSet<>();
+        Map<String, Integer> dailyCourseTypeCount = new HashMap<>();
+        Map<String, Set<Integer>> batchDailyPrSubjects = new HashMap<>();
         boolean zeroClashes = true;
 
         for (TimetableEntry e : state.getPlaced()) {
             String facKey = e.getFacultyId() + ":" + e.getSlotId();
-            String clsKey = e.getClassId() + ":" + e.getSlotId();
+            String clsSlotKey = e.getClassId() + ":" + e.getSlotId();
             String rmKey = e.getRoomId() + ":" + e.getSlotId();
 
             if (!facultySlotCheck.add(facKey)) {
                 System.err.println("  [CLASH] Faculty double booking at " + facKey);
                 zeroClashes = false;
             }
-            if (!classSlotCheck.add(clsKey)) {
-                System.err.println("  [CLASH] Class double booking at " + clsKey);
-                zeroClashes = false;
+            if (e.getBatchId() == null || e.getBatchId() <= 0) {
+                if (anyClassSlotCheck.contains(clsSlotKey) || !wholeClassSlotCheck.add(clsSlotKey)) {
+                    System.err.println("  [CLASH] Whole-class double booking at " + clsSlotKey);
+                    zeroClashes = false;
+                }
+                anyClassSlotCheck.add(clsSlotKey);
+            } else {
+                String bSlotKey = e.getClassId() + ":" + e.getBatchId() + ":" + e.getSlotId();
+                if (wholeClassSlotCheck.contains(clsSlotKey) || !batchSlotCheck.add(bSlotKey)) {
+                    System.err.println("  [CLASH] Batch double booking or whole-class overlap at " + bSlotKey);
+                    zeroClashes = false;
+                }
+                anyClassSlotCheck.add(clsSlotKey);
             }
             if (!roomSlotCheck.add(rmKey)) {
                 System.err.println("  [CLASH] Room double booking at " + rmKey);
                 zeroClashes = false;
+            }
+
+            String dailyKey = e.getClassId() + ":" + e.getSubjectId() + ":" + e.getDay() + ":" + e.getSessionType();
+            int count = dailyCourseTypeCount.merge(dailyKey, 1, Integer::sum);
+            if ("TH".equals(e.getSessionType()) && count > 1) {
+                System.err.println("  [DAILY LIMIT VIOLATION] >1 TH lec of course on same day: " + dailyKey);
+                zeroClashes = false;
+            }
+            if ("PR".equals(e.getSessionType()) && count > 2) {
+                System.err.println("  [DAILY LIMIT VIOLATION] >2 PR lec of course on same day: " + dailyKey);
+                zeroClashes = false;
+            }
+            if ("PR".equals(e.getSessionType()) && e.getBatchId() != null && e.getBatchId() > 0) {
+                String batchDayKey = e.getClassId() + ":" + e.getBatchId() + ":" + e.getDay();
+                Set<Integer> subjects = batchDailyPrSubjects.computeIfAbsent(batchDayKey, k -> new HashSet<>());
+                subjects.add(e.getSubjectId());
+                if (subjects.size() > 1) {
+                    System.err.println("  [BATCH DAILY LIMIT VIOLATION] Batch performs >1 PR course on same day: " + batchDayKey);
+                    zeroClashes = false;
+                }
             }
         }
 

@@ -11,11 +11,13 @@ import java.util.*;
  */
 public class SchedulingState {
 
-    // Key format: "entityId:slotId"
-    private final Set<String> occupiedFacultySlots = new HashSet<>();
-    private final Set<String> occupiedClassSlots   = new HashSet<>();
-    private final Set<String> occupiedRoomSlots    = new HashSet<>();
-    private final Set<String> facultyUnavailable   = new HashSet<>();
+    // Key format: "entityId:slotId" or "classId:batchId:slotId"
+    private final Set<String>          occupiedFacultySlots    = new HashSet<>();
+    private final Map<String, Integer> classSlotCount          = new HashMap<>();
+    private final Set<String>          occupiedWholeClassSlots = new HashSet<>();
+    private final Set<String>          occupiedBatchSlots      = new HashSet<>();
+    private final Set<String>          occupiedRoomSlots       = new HashSet<>();
+    private final Set<String>          facultyUnavailable      = new HashSet<>();
 
     // Placed entries (committed result)
     private final List<TimetableEntry> placed = new ArrayList<>();
@@ -31,7 +33,21 @@ public class SchedulingState {
     }
 
     public boolean isClassFree(int classId, int slotId) {
-        return !occupiedClassSlots.contains(key(classId, slotId));
+        return classSlotCount.getOrDefault(key(classId, slotId), 0) == 0;
+    }
+
+    /**
+     * Checks whether a slot is free for either the whole class ({@code batchId == null})
+     * or a specific practical batch ({@code batchId > 0}). Different batches of the same
+     * class may run parallel practicals in the same slot, but a batch cannot overlap a
+     * whole-class lecture or another session of the same batch.
+     */
+    public boolean isClassFree(int classId, Integer batchId, int slotId) {
+        if (batchId == null || batchId <= 0) {
+            return isClassFree(classId, slotId);
+        }
+        return !occupiedWholeClassSlots.contains(key(classId, slotId))
+            && !occupiedBatchSlots.contains(batchSlotKey(classId, batchId, slotId));
     }
 
     public boolean isRoomFree(int roomId, int slotId) {
@@ -41,14 +57,24 @@ public class SchedulingState {
     // -------------------------------------------------------------------------
     public void occupy(TimetableEntry te) {
         occupiedFacultySlots.add(key(te.getFacultyId(), te.getSlotId()));
-        occupiedClassSlots.add(key(te.getClassId(), te.getSlotId()));
+        classSlotCount.merge(key(te.getClassId(), te.getSlotId()), 1, Integer::sum);
+        if (hasBatch(te)) {
+            occupiedBatchSlots.add(batchSlotKey(te.getClassId(), te.getBatchId(), te.getSlotId()));
+        } else {
+            occupiedWholeClassSlots.add(key(te.getClassId(), te.getSlotId()));
+        }
         occupiedRoomSlots.add(key(te.getRoomId(), te.getSlotId()));
         placed.add(te);
     }
 
     public void release(TimetableEntry te) {
         occupiedFacultySlots.remove(key(te.getFacultyId(), te.getSlotId()));
-        occupiedClassSlots.remove(key(te.getClassId(), te.getSlotId()));
+        classSlotCount.computeIfPresent(key(te.getClassId(), te.getSlotId()), (k, v) -> v > 1 ? v - 1 : null);
+        if (hasBatch(te)) {
+            occupiedBatchSlots.remove(batchSlotKey(te.getClassId(), te.getBatchId(), te.getSlotId()));
+        } else {
+            occupiedWholeClassSlots.remove(key(te.getClassId(), te.getSlotId()));
+        }
         occupiedRoomSlots.remove(key(te.getRoomId(), te.getSlotId()));
         placed.remove(te);
     }
@@ -66,7 +92,70 @@ public class SchedulingState {
         return (int) placed.stream().filter(e ->
                 e.getSubjectId() == subjectId
              && e.getClassId()   == classId
+             && day != null && day.equalsIgnoreCase(e.getDay())
+        ).count();
+    }
+
+    /** Count sessions of a specific type (TH/PR/TU) for a subject within a class on a specific day. */
+    public int subjectSessionsOnDayByType(int subjectId, int classId, String day, String sessionType) {
+        return (int) placed.stream().filter(e ->
+                e.getSubjectId() == subjectId
+             && e.getClassId()   == classId
+             && day != null && day.equalsIgnoreCase(e.getDay())
+             && sessionType != null && sessionType.equalsIgnoreCase(e.getSessionType())
+        ).count();
+    }
+
+    /**
+     * Enforces daily course limits:
+     * - Max 1 theory lecture (TH) of the same course per day.
+     * - Max 2 practical lecture slots (PR) of the same course per day.
+     */
+    public boolean canScheduleCourseOnDay(int subjectId, int classId, String day,
+                                          String sessionType, int slotsToAdd) {
+        if (day == null || sessionType == null) return true;
+        int existing = subjectSessionsOnDayByType(subjectId, classId, day, sessionType);
+        if ("TH".equalsIgnoreCase(sessionType)) {
+            return existing + slotsToAdd <= 1;
+        }
+        if ("PR".equalsIgnoreCase(sessionType)) {
+            return existing + slotsToAdd <= 2;
+        }
+        return true;
+    }
+
+    /**
+     * Enforces per-batch daily practical limit:
+     * each batch can perform practicals (PR) for at most one course on a given day.
+     */
+    public boolean canBatchPerformPracticalOnDay(int classId, Integer batchId, int subjectId, String day) {
+        if (batchId == null || batchId <= 0 || day == null) return true;
+        return placed.stream().noneMatch(e ->
+                e.getClassId() == classId
+             && Objects.equals(e.getBatchId(), batchId)
              && day.equalsIgnoreCase(e.getDay())
+             && "PR".equalsIgnoreCase(e.getSessionType())
+             && e.getSubjectId() != subjectId
+        );
+    }
+
+    /** Returns true if another batch of this class already has a PR session at the given slot. */
+    public boolean hasBatchPracticalAtSlot(int classId, int slotId) {
+        return placed.stream().anyMatch(e ->
+                e.getClassId() == classId
+             && e.getSlotId() == slotId
+             && "PR".equalsIgnoreCase(e.getSessionType())
+             && hasBatch(e)
+        );
+    }
+
+    /** Count distinct practical slot-pairs/sessions on a given day for day-load balancing. */
+    public int practicalEntriesOnDay(int classId, String day) {
+        if (day == null) return 0;
+        return (int) placed.stream().filter(e ->
+                e.getClassId() == classId
+             && day.equalsIgnoreCase(e.getDay())
+             && "PR".equalsIgnoreCase(e.getSessionType())
         ).count();
     }
 
@@ -88,6 +177,14 @@ public class SchedulingState {
     }
 
     // -------------------------------------------------------------------------
+    private static boolean hasBatch(TimetableEntry te) {
+        return te.getBatchId() != null && te.getBatchId() > 0;
+    }
+
     private static String key(int a, int b) { return a + ":" + b; }
+
+    private static String batchSlotKey(int classId, int batchId, int slotId) {
+        return classId + ":" + batchId + ":" + slotId;
+    }
 }
 
