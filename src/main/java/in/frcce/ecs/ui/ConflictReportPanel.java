@@ -35,19 +35,19 @@ public class ConflictReportPanel extends JPanel implements MainFrame.Refreshable
     }
 
     private void buildUI() {
-        JPanel toolbar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 8));
-        toolbar.setBackground(new Color(0xF1, 0xF3, 0xF4));
+        JPanel toolbar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
+        UiTheme.styleToolbar(toolbar);
 
         JButton refreshBtn = new JButton("↻ Refresh");
+        UiTheme.styleButton(refreshBtn);
         refreshBtn.addActionListener(e -> refresh());
 
         JButton exportBtn = new JButton("📄 Export CSV");
-        exportBtn.setBackground(new Color(0x34, 0xA8, 0x53));
-        exportBtn.setForeground(Color.WHITE);
+        UiTheme.styleActionButton(exportBtn, new Color(0x34, 0xA8, 0x53), Color.WHITE);
         exportBtn.addActionListener(e -> ExportUtil.exportTableToCSV(table, this));
 
         summaryLabel = new JLabel("No generation run yet.");
-        summaryLabel.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        summaryLabel.setFont(UiTheme.bold(12f));
 
         toolbar.add(refreshBtn);
         toolbar.add(exportBtn);
@@ -60,9 +60,7 @@ public class ConflictReportPanel extends JPanel implements MainFrame.Refreshable
             @Override public boolean isCellEditable(int r, int c) { return false; }
         };
         table = new JTable(tableModel);
-        table.setRowHeight(24);
-        table.setFont(new Font("Segoe UI", Font.PLAIN, 12));
-        table.getTableHeader().setFont(new Font("Segoe UI", Font.BOLD, 12));
+        UiTheme.applyTableStyle(table);
 
         // Color status column
         table.getColumnModel().getColumn(5).setCellRenderer(new DefaultTableCellRenderer() {
@@ -71,10 +69,11 @@ public class ConflictReportPanel extends JPanel implements MainFrame.Refreshable
                 Component c = super.getTableCellRendererComponent(t, val, isSel, hasFoc, row, col);
                 String text = val != null ? val.toString() : "";
                 if (text.contains("Unplaced")) {
-                    c.setForeground(new Color(0xD9, 0x30, 0x25)); // red
-                    setFont(getFont().deriveFont(Font.BOLD));
+                    c.setForeground(UiTheme.COLOR_STATUS_ERROR);
+                    setFont(UiTheme.bold(12f));
                 } else {
                     c.setForeground(new Color(0x18, 0x80, 0x38)); // green
+                    setFont(UiTheme.FONT_BASE);
                 }
                 return c;
             }

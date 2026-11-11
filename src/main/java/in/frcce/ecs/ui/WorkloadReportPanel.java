@@ -51,21 +51,26 @@ public class WorkloadReportPanel extends JPanel implements MainFrame.Refreshable
     }
 
     private void buildUI() {
-        JPanel toolbar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 8));
-        toolbar.setBackground(new Color(0xF1, 0xF3, 0xF4));
+        JPanel toolbar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
+        UiTheme.styleToolbar(toolbar);
 
-        toolbar.add(new JLabel("Academic Year:"));
+        JLabel yrLbl = new JLabel("Academic Year:");
+        yrLbl.setFont(UiTheme.bold(11f));
+        toolbar.add(yrLbl);
+
         yearCombo = new JComboBox<>(new String[]{"2026-27", "2025-26"});
+        yearCombo.setFont(UiTheme.FONT_BASE);
+        yearCombo.setPreferredSize(new Dimension(100, 28));
         yearCombo.addActionListener(e -> refresh());
         toolbar.add(yearCombo);
 
         JButton refreshBtn = new JButton("↻ Refresh");
+        UiTheme.styleButton(refreshBtn);
         refreshBtn.addActionListener(e -> refresh());
         toolbar.add(refreshBtn);
 
         JButton exportBtn = new JButton("📄 Export Workload CSV");
-        exportBtn.setBackground(new Color(0x34, 0xA8, 0x53));
-        exportBtn.setForeground(Color.WHITE);
+        UiTheme.styleActionButton(exportBtn, new Color(0x34, 0xA8, 0x53), Color.WHITE);
         exportBtn.addActionListener(e -> ExportUtil.exportTableToCSV(workloadTable, this));
         toolbar.add(exportBtn);
 
@@ -81,15 +86,15 @@ public class WorkloadReportPanel extends JPanel implements MainFrame.Refreshable
 
     private JPanel buildWorkloadSection() {
         JPanel panel = new JPanel(new BorderLayout());
-        panel.setBorder(new TitledBorder("Faculty Workload Summary"));
+        TitledBorder tb = new TitledBorder("Faculty Workload Summary");
+        tb.setTitleFont(UiTheme.FONT_SECTION);
+        panel.setBorder(tb);
 
         workloadTableModel = new DefaultTableModel(WORKLOAD_COLS, 0) {
             @Override public boolean isCellEditable(int r, int c) { return false; }
         };
         workloadTable = new JTable(workloadTableModel);
-        workloadTable.setRowHeight(24);
-        workloadTable.setFont(new Font("Segoe UI", Font.PLAIN, 12));
-        workloadTable.getTableHeader().setFont(new Font("Segoe UI", Font.BOLD, 12));
+        UiTheme.applyTableStyle(workloadTable);
         workloadTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
 
         workloadTable.getSelectionModel().addListSelectionListener(e -> {
@@ -113,11 +118,13 @@ public class WorkloadReportPanel extends JPanel implements MainFrame.Refreshable
 
     private JPanel buildFreeSlotSection() {
         JPanel panel = new JPanel(new BorderLayout());
-        panel.setBorder(new TitledBorder("Free Slots / Availability"));
+        TitledBorder tb = new TitledBorder("Free Slots / Availability");
+        tb.setTitleFont(UiTheme.FONT_SECTION);
+        panel.setBorder(tb);
 
         JPanel top = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
         freeSlotHeaderLabel = new JLabel("Select a faculty above to view free slots");
-        freeSlotHeaderLabel.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        freeSlotHeaderLabel.setFont(UiTheme.bold(12f));
         top.add(freeSlotHeaderLabel);
         panel.add(top, BorderLayout.NORTH);
 
@@ -125,9 +132,7 @@ public class WorkloadReportPanel extends JPanel implements MainFrame.Refreshable
             @Override public boolean isCellEditable(int r, int c) { return false; }
         };
         freeSlotTable = new JTable(freeSlotTableModel);
-        freeSlotTable.setRowHeight(22);
-        freeSlotTable.setFont(new Font("Segoe UI", Font.PLAIN, 12));
-        freeSlotTable.getTableHeader().setFont(new Font("Segoe UI", Font.BOLD, 12));
+        UiTheme.applyTableStyle(freeSlotTable);
 
         panel.add(new JScrollPane(freeSlotTable), BorderLayout.CENTER);
         return panel;

@@ -12,29 +12,27 @@ import java.awt.*;
 import java.awt.event.*;
 import java.util.*;
 import java.util.List;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
 /**
  * Main timetable view panel.
  * Shows a weekly grid: days as columns, time-slots as rows.
- * Supports Class-wise, Faculty-wise, and Room-wise views.
- * Includes Generate, Export CSV, Print, and manual Edit actions.
+ * Uses GridBagLayout directly in BorderLayout.CENTER (no JScrollPane) so that all slots
+ * and days fit on ONE screen without horizontal or vertical scrollbars.
+ * Dynamically detects whether Saturday has time slots in the database and auto-hides
+ * the Saturday column if none exist.
  */
 public class TimetableViewPanel extends JPanel implements MainFrame.Refreshable {
 
+    private static final Logger LOG = Logger.getLogger(TimetableViewPanel.class.getName());
+
     private static final String ACADEMIC_YEAR = "2026-27";
-
-    // Colors by session type
-    private static final Color COLOR_TH   = new Color(0xBB, 0xDE, 0xFB); // light blue
-    private static final Color COLOR_PR   = new Color(0xCC, 0xFF, 0xCC); // light green
-    private static final Color COLOR_TU   = new Color(0xFF, 0xE0, 0xB2); // light orange
-    private static final Color COLOR_FREE = new Color(0xF8, 0xF9, 0xFA); // near-white
-    private static final Color COLOR_BREAK = new Color(0xE8, 0xEA, 0xED); // grey
-
-    private static final String[] DAYS = {"MONDAY","TUESDAY","WEDNESDAY","THURSDAY","FRIDAY","SATURDAY"};
 
     private final User        currentUser;
     private final AuthService authService;
+    private MainFrame         mainFrame;
 
     private final TimetableService    timetableService;
     private final ClassDivisionDAO    classDivisionDAO;
@@ -48,20 +46,23 @@ public class TimetableViewPanel extends JPanel implements MainFrame.Refreshable 
     private JComboBox<Object> entityCombo;
     private JLabel            progressLabel;
     private JProgressBar      progressBar;
+    private boolean           isUpdatingEntityCombo = false;
 
-    // Grid panel
+    // Grid panel (directly placed in CENTER of TimetableViewPanel)
     private JPanel gridPanel;
 
     // Current data
     private List<TimeSlot>        allSlots;    // includes breaks
     private List<TimetableEntry>  currentEntries;
 
-    // For manual edit
-    private List<TimetableEntry> lastConflictPlaced = new ArrayList<>();
-
     public TimetableViewPanel(User user, AuthService authService) {
-        this.currentUser     = user;
-        this.authService     = authService;
+        this(user, authService, null);
+    }
+
+    public TimetableViewPanel(User user, AuthService authService, MainFrame mainFrame) {
+        this.currentUser      = user;
+        this.authService      = authService;
+        this.mainFrame        = mainFrame;
         this.timetableService = new TimetableService();
         this.classDivisionDAO = new ClassDivisionDAO();
         this.facultyDAO       = new FacultyDAO();
@@ -73,23 +74,40 @@ public class TimetableViewPanel extends JPanel implements MainFrame.Refreshable 
         buildUI();
     }
 
+    public void setMainFrame(MainFrame mainFrame) {
+        this.mainFrame = mainFrame;
+    }
+
+    private void updateStatusBar(String message, boolean isError) {
+        MainFrame mf = mainFrame;
+        if (mf == null) {
+            Window w = SwingUtilities.getWindowAncestor(this);
+            if (w instanceof MainFrame) {
+                mf = (MainFrame) w;
+            }
+        }
+        if (mf != null) {
+            mf.setStatusMessage(message, isError);
+        }
+    }
+
     // =========================================================================
     private void buildUI() {
+        // Compact single-row toolbar: 36px fixed height
         add(buildToolbar(), BorderLayout.NORTH);
 
-        // Scrollable grid
+        // Grid panel directly in CENTER (no JScrollPane wrapper)
         gridPanel = new JPanel(new BorderLayout());
         gridPanel.setBackground(Color.WHITE);
-        JScrollPane scroll = new JScrollPane(gridPanel);
-        scroll.getVerticalScrollBar().setUnitIncrement(16);
-        scroll.getHorizontalScrollBar().setUnitIncrement(16);
-        add(scroll, BorderLayout.CENTER);
-
-        // Legend
-        add(buildLegend(), BorderLayout.SOUTH);
+        add(gridPanel, BorderLayout.CENTER);
 
         // Load slots
-        allSlots = timeSlotDAO.findAllIncBreaks();
+        try {
+            allSlots = timeSlotDAO.findAllIncBreaks();
+        } catch (Exception ex) {
+            LOG.log(Level.WARNING, "Failed to load time slots: " + ex.getMessage(), ex);
+            allSlots = Collections.emptyList();
+        }
 
         // Initial load
         SwingUtilities.invokeLater(this::loadEntityCombo);
@@ -97,56 +115,76 @@ public class TimetableViewPanel extends JPanel implements MainFrame.Refreshable 
 
     // =========================================================================
     private JPanel buildToolbar() {
-        JPanel bar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 6));
-        bar.setBackground(new Color(0xF1, 0xF3, 0xF4));
-        bar.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, new Color(0xDA, 0xDC, 0xE0)));
+        JPanel bar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
+        bar.setPreferredSize(new Dimension(0, 36));
+        bar.setMinimumSize(new Dimension(0, 36));
+        bar.setMaximumSize(new Dimension(Integer.MAX_VALUE, 36));
+        bar.setBackground(UiTheme.COLOR_TOOLBAR_BG);
+        bar.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, UiTheme.COLOR_GRID));
 
         // View type
-        bar.add(new JLabel("View:"));
+        JLabel viewLbl = new JLabel("View:");
+        viewLbl.setFont(UiTheme.FONT_BASE);
+        bar.add(viewLbl);
+
         viewTypeCombo = new JComboBox<>(new String[]{"Class View", "Faculty View", "Room View"});
+        viewTypeCombo.setFont(UiTheme.FONT_BASE);
+        viewTypeCombo.setPreferredSize(new Dimension(115, 28));
         viewTypeCombo.addActionListener(e -> loadEntityCombo());
         bar.add(viewTypeCombo);
 
         // Entity selector
-        bar.add(new JLabel("Select:"));
+        JLabel selLbl = new JLabel("Select:");
+        selLbl.setFont(UiTheme.FONT_BASE);
+        bar.add(selLbl);
+
         entityCombo = new JComboBox<>();
-        entityCombo.setPreferredSize(new Dimension(220, 28));
-        entityCombo.addActionListener(e -> refreshGrid());
+        entityCombo.setFont(UiTheme.FONT_BASE);
+        entityCombo.setPreferredSize(new Dimension(190, 28));
+        entityCombo.addActionListener(e -> {
+            if (!isUpdatingEntityCombo) refreshGrid();
+        });
         bar.add(entityCombo);
 
-        bar.add(new JSeparator(SwingConstants.VERTICAL));
+        JSeparator sep1 = new JSeparator(SwingConstants.VERTICAL);
+        sep1.setPreferredSize(new Dimension(1, 20));
+        bar.add(sep1);
 
         // Generate button (admin only)
         if (authService.isAdmin()) {
-            JButton generateBtn = makeButton("⚡ Generate", new Color(0x1A, 0x73, 0xE8));
+            JButton generateBtn = makeButton("\u26A1 Generate", UiTheme.COLOR_HEADER);
             generateBtn.addActionListener(e -> onGenerate());
             bar.add(generateBtn);
 
-            JButton clearBtn = makeButton("🗑 Clear", new Color(0xEA, 0x43, 0x35));
+            JButton clearBtn = makeButton("\uD83D\uDDD1 Clear", UiTheme.COLOR_LOGOUT);
             clearBtn.addActionListener(e -> onClear());
             bar.add(clearBtn);
 
-            bar.add(new JSeparator(SwingConstants.VERTICAL));
+            JSeparator sep2 = new JSeparator(SwingConstants.VERTICAL);
+            sep2.setPreferredSize(new Dimension(1, 20));
+            bar.add(sep2);
         }
 
-        JButton exportBtn = makeButton("📄 Export CSV", new Color(0x34, 0xA8, 0x53));
+        JButton exportBtn = makeButton("\uD83D\uDCC4 Export CSV", new Color(0x34, 0xA8, 0x53));
         exportBtn.addActionListener(e -> onExportCSV());
         bar.add(exportBtn);
 
-        JButton printBtn = makeButton("🖨 Print", new Color(0x60, 0x60, 0x60));
+        JButton printBtn = makeButton("\uD83D\uDDA8 Print", new Color(0x60, 0x60, 0x60));
         printBtn.addActionListener(e -> onPrint());
         bar.add(printBtn);
 
-        bar.add(new JSeparator(SwingConstants.VERTICAL));
+        JSeparator sep3 = new JSeparator(SwingConstants.VERTICAL);
+        sep3.setPreferredSize(new Dimension(1, 20));
+        bar.add(sep3);
 
         progressBar = new JProgressBar();
         progressBar.setIndeterminate(false);
         progressBar.setVisible(false);
-        progressBar.setPreferredSize(new Dimension(120, 20));
+        progressBar.setPreferredSize(new Dimension(100, 18));
         bar.add(progressBar);
 
         progressLabel = new JLabel("");
-        progressLabel.setFont(new Font("Segoe UI", Font.ITALIC, 11));
+        progressLabel.setFont(UiTheme.font(Font.ITALIC, 11f));
         progressLabel.setForeground(Color.GRAY);
         bar.add(progressLabel);
 
@@ -159,49 +197,36 @@ public class TimetableViewPanel extends JPanel implements MainFrame.Refreshable 
         btn.setForeground(Color.WHITE);
         btn.setFocusPainted(false);
         btn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        btn.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        btn.setFont(UiTheme.font(Font.BOLD, 12f));
+        btn.setMargin(new Insets(2, 8, 2, 8));
+        btn.setPreferredSize(new Dimension(btn.getPreferredSize().width, 28));
         return btn;
     }
 
     // =========================================================================
-    private JPanel buildLegend() {
-        JPanel legend = new JPanel(new FlowLayout(FlowLayout.LEFT, 12, 4));
-        legend.setBackground(new Color(0xF8, 0xF9, 0xFA));
-        legend.setBorder(BorderFactory.createMatteBorder(1, 0, 0, 0, new Color(0xDA, 0xDC, 0xE0)));
-        legend.add(new JLabel("Legend:"));
-        addLegendItem(legend, "Theory (TH)",     COLOR_TH);
-        addLegendItem(legend, "Practical (PR)",  COLOR_PR);
-        addLegendItem(legend, "Tutorial (TU)",   COLOR_TU);
-        addLegendItem(legend, "Break",           COLOR_BREAK);
-        addLegendItem(legend, "Free",            COLOR_FREE);
-        return legend;
-    }
-
-    private void addLegendItem(JPanel panel, String label, Color color) {
-        JPanel swatch = new JPanel();
-        swatch.setBackground(color);
-        swatch.setBorder(BorderFactory.createLineBorder(Color.GRAY));
-        swatch.setPreferredSize(new Dimension(16, 16));
-        panel.add(swatch);
-        panel.add(new JLabel(label));
-    }
-
-    // =========================================================================
     private void loadEntityCombo() {
-        entityCombo.removeAllItems();
-        String view = (String) viewTypeCombo.getSelectedItem();
-        if ("Class View".equals(view)) {
-            for (ClassDivision cd : classDivisionDAO.findAll()) {
-                entityCombo.addItem(new ComboItem(cd.getClassId(), cd.getLabel()));
+        isUpdatingEntityCombo = true;
+        try {
+            entityCombo.removeAllItems();
+            String view = (String) viewTypeCombo.getSelectedItem();
+            if ("Class View".equals(view)) {
+                for (ClassDivision cd : classDivisionDAO.findAll()) {
+                    entityCombo.addItem(new ComboItem(cd.getClassId(), cd.getLabel()));
+                }
+            } else if ("Faculty View".equals(view)) {
+                for (Faculty f : facultyDAO.findAll()) {
+                    entityCombo.addItem(new ComboItem(f.getFacultyId(), f.getName()));
+                }
+            } else {
+                for (Room r : roomDAO.findAll()) {
+                    entityCombo.addItem(new ComboItem(r.getRoomId(), r.getName() + " (" + r.getType() + ")"));
+                }
             }
-        } else if ("Faculty View".equals(view)) {
-            for (Faculty f : facultyDAO.findAll()) {
-                entityCombo.addItem(new ComboItem(f.getFacultyId(), f.getName()));
-            }
-        } else {
-            for (Room r : roomDAO.findAll()) {
-                entityCombo.addItem(new ComboItem(r.getRoomId(), r.getName() + " (" + r.getType() + ")"));
-            }
+        } catch (Exception ex) {
+            LOG.log(Level.WARNING, "Failed to load entities: " + ex.getMessage(), ex);
+            updateStatusBar("Error loading entities: " + ex.getMessage(), true);
+        } finally {
+            isUpdatingEntityCombo = false;
         }
         refreshGrid();
     }
@@ -209,7 +234,12 @@ public class TimetableViewPanel extends JPanel implements MainFrame.Refreshable 
     // =========================================================================
     @Override
     public void refresh() {
-        allSlots = timeSlotDAO.findAllIncBreaks();
+        try {
+            allSlots = timeSlotDAO.findAllIncBreaks();
+        } catch (Exception ex) {
+            LOG.log(Level.WARNING, "Failed to load time slots: " + ex.getMessage(), ex);
+            allSlots = Collections.emptyList();
+        }
         loadEntityCombo();
     }
 
@@ -219,11 +249,13 @@ public class TimetableViewPanel extends JPanel implements MainFrame.Refreshable 
             gridPanel.removeAll();
             gridPanel.revalidate();
             gridPanel.repaint();
+            updateStatusBar("No selection.", false);
             return;
         }
 
         String view = (String) viewTypeCombo.getSelectedItem();
         int id = selected.getId();
+        updateStatusBar("Loading " + view + "...", false);
 
         SwingWorker<List<TimetableEntry>, Void> worker = new SwingWorker<>() {
             @Override
@@ -238,10 +270,13 @@ public class TimetableViewPanel extends JPanel implements MainFrame.Refreshable 
                 try {
                     currentEntries = get();
                     buildGrid(currentEntries);
+                    updateStatusBar("Ready", false);
                 } catch (Exception ex) {
-                    JOptionPane.showMessageDialog(TimetableViewPanel.this,
-                            "Error loading timetable: " + ex.getMessage(),
-                            "Error", JOptionPane.ERROR_MESSAGE);
+                    LOG.log(Level.WARNING, "Error loading timetable: " + ex.getMessage(), ex);
+                    buildGrid(Collections.emptyList());
+                    Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+                    String errorMsg = "Error loading timetable: " + cause.getMessage();
+                    updateStatusBar(errorMsg, true);
                 }
             }
         };
@@ -249,103 +284,117 @@ public class TimetableViewPanel extends JPanel implements MainFrame.Refreshable 
     }
 
     // =========================================================================
-    /** Build the weekly grid table inside gridPanel. */
+    /** Build the weekly grid table directly inside gridPanel using GridBagLayout. */
     private void buildGrid(List<TimetableEntry> entries) {
+        if (entries == null) {
+            entries = Collections.emptyList();
+        }
         gridPanel.removeAll();
 
         if (allSlots == null || allSlots.isEmpty()) {
-            gridPanel.add(new JLabel("No time slots configured. Please add slots in the Time Slots screen."),
-                    BorderLayout.CENTER);
+            JLabel emptyLbl = new JLabel("No time slots configured. Please add slots in the Time Slots screen.", SwingConstants.CENTER);
+            emptyLbl.setFont(UiTheme.FONT_BASE);
+            gridPanel.add(emptyLbl, BorderLayout.CENTER);
             gridPanel.revalidate();
             gridPanel.repaint();
             return;
         }
 
+        // Dynamically detect if Saturday has time slots in the database
+        boolean hasSaturday = allSlots.stream()
+                .anyMatch(ts -> "SATURDAY".equalsIgnoreCase(ts.getDay()));
+        List<String> activeDays = new ArrayList<>();
+        activeDays.add("MONDAY");
+        activeDays.add("TUESDAY");
+        activeDays.add("WEDNESDAY");
+        activeDays.add("THURSDAY");
+        activeDays.add("FRIDAY");
+        if (hasSaturday) {
+            activeDays.add("SATURDAY");
+        }
+
         // Index entries by (day, slotNo)
         Map<String, List<TimetableEntry>> entryMap = new HashMap<>();
         for (TimetableEntry te : entries) {
-            String key = te.getDay() + "_" + te.getSlotNo();
+            String key = te.getDay().toUpperCase() + "_" + te.getSlotNo();
             entryMap.computeIfAbsent(key, k -> new ArrayList<>()).add(te);
         }
 
-        // Build grid: rows = slots, cols = days
-        // Get unique slot numbers
+        // Get unique slot numbers sorted by slotNo
         List<TimeSlot> uniqueSlots = allSlots.stream()
-                .filter(ts -> "MONDAY".equals(ts.getDay()))
+                .filter(ts -> "MONDAY".equalsIgnoreCase(ts.getDay()))
                 .sorted(Comparator.comparingInt(TimeSlot::getSlotNo))
                 .collect(Collectors.toList());
+        if (uniqueSlots.isEmpty()) {
+            Map<Integer, TimeSlot> slotMap = new TreeMap<>();
+            for (TimeSlot ts : allSlots) {
+                slotMap.putIfAbsent(ts.getSlotNo(), ts);
+            }
+            uniqueSlots = new ArrayList<>(slotMap.values());
+        }
 
         JPanel grid = new JPanel(new GridBagLayout());
-        grid.setBackground(new Color(0xDA, 0xDC, 0xE0)); // grid line color
+        grid.setBackground(UiTheme.COLOR_GRID); // 1px borders between cells
 
         GridBagConstraints gbc = new GridBagConstraints();
         gbc.fill = GridBagConstraints.BOTH;
         gbc.insets = new Insets(0, 0, 1, 1);
 
-        // Header row
+        // Header row: 28px fixed height
         gbc.gridy = 0;
         gbc.weighty = 0.0;
         gbc.gridx = 0;
         gbc.weightx = 0.0;
         JPanel cornerHeader = makeHeaderCell("Time \\ Day");
-        cornerHeader.setPreferredSize(new Dimension(82, 30));
+        cornerHeader.setPreferredSize(new Dimension(80, 28));
+        cornerHeader.setMinimumSize(new Dimension(80, 28));
         grid.add(cornerHeader, gbc);
 
+        // Day columns share remaining width equally (weightx = 1.0)
         gbc.weightx = 1.0;
-        for (int c = 0; c < DAYS.length; c++) {
+        for (int c = 0; c < activeDays.size(); c++) {
             gbc.gridx = c + 1;
-            JPanel dayHeader = makeHeaderCell(DAYS[c].substring(0, 3)); // Mon, Tue...
-            dayHeader.setPreferredSize(new Dimension(140, 30));
+            String day = activeDays.get(c);
+            String label = day.substring(0, 1) + day.substring(1, 3).toLowerCase(); // Mon, Tue...
+            JPanel dayHeader = makeHeaderCell(label);
             grid.add(dayHeader, gbc);
         }
 
-        // Data rows (per-row heights via GridBagLayout so breaks/TH rows don't stretch to PR height)
+        // Data rows: equal height for normal slots (weighty = 1.0), break rows at ~40% (weighty = 0.4)
         for (int r = 0; r < uniqueSlots.size(); r++) {
             TimeSlot slotDef = uniqueSlots.get(r);
             gbc.gridy = r + 1;
 
             boolean isBreakRow = slotDef.isBreak();
-            boolean hasMultiEntryRow = false;
-            if (!isBreakRow) {
-                for (String day : DAYS) {
-                    if (entryMap.getOrDefault(day + "_" + slotDef.getSlotNo(), Collections.emptyList()).size() > 2) {
-                        hasMultiEntryRow = true;
-                        break;
-                    }
-                }
-            }
+            gbc.weighty = isBreakRow ? 0.4 : 1.0;
 
-            gbc.weighty = isBreakRow ? 0.0 : (hasMultiEntryRow ? 1.4 : 1.0);
-
-            // Time column
+            // Time column: fixed 80px width
             gbc.gridx = 0;
             gbc.weightx = 0.0;
             JPanel timeCell = makeTimeCell(slotDef);
-            int timeRowHeight = isBreakRow ? 24 : (hasMultiEntryRow ? 84 : 46);
-            timeCell.setPreferredSize(new Dimension(82, timeRowHeight));
             grid.add(timeCell, gbc);
 
+            // Active day columns
             gbc.weightx = 1.0;
-            for (int c = 0; c < DAYS.length; c++) {
-                String day = DAYS[c];
+            for (int c = 0; c < activeDays.size(); c++) {
+                String day = activeDays.get(c);
                 gbc.gridx = c + 1;
                 String key = day + "_" + slotDef.getSlotNo();
                 List<TimetableEntry> dayEntries = entryMap.getOrDefault(key, Collections.emptyList());
 
                 if (isBreakRow) {
                     JPanel bc = new JPanel(new BorderLayout());
-                    bc.setBackground(COLOR_BREAK);
-                    bc.setPreferredSize(new Dimension(140, 24));
-                    JLabel bl = new JLabel(slotDef.getSlotNo() == 3 ? "Short Break" : "Lunch Break",
-                            SwingConstants.CENTER);
-                    bl.setFont(new Font("Segoe UI", Font.ITALIC, 10));
-                    bl.setForeground(Color.GRAY);
+                    bc.setBackground(UiTheme.COLOR_BREAK);
+                    bc.setBorder(BorderFactory.createLineBorder(UiTheme.COLOR_GRID, 1));
+                    JLabel bl = new JLabel(slotDef.getSlotNo() == 3 ? "Short Break" : "Lunch Break", SwingConstants.CENTER);
+                    bl.setFont(UiTheme.italic(10f));
+                    bl.setForeground(new Color(0x5F, 0x63, 0x68));
                     bc.add(bl, BorderLayout.CENTER);
                     grid.add(bc, gbc);
                 } else if (dayEntries.isEmpty()) {
                     JPanel free = new JPanel(new BorderLayout());
-                    free.setBackground(COLOR_FREE);
-                    // Double-click to manually add (admin only)
+                    free.setBackground(UiTheme.COLOR_FREE);
+                    free.setBorder(BorderFactory.createLineBorder(UiTheme.COLOR_GRID, 1));
                     if (authService.isAdmin()) {
                         free.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
                         free.setToolTipText("Double-click to manually add a session");
@@ -357,24 +406,31 @@ public class TimetableViewPanel extends JPanel implements MainFrame.Refreshable 
                             }
                         });
                     }
+                    attachCellInteractions(free, UiTheme.COLOR_FREE, null, null);
                     grid.add(free, gbc);
                 } else if (dayEntries.size() == 1) {
-                    grid.add(makeEntryCell(dayEntries.get(0)), gbc);
+                    grid.add(makeSingleEntryCell(dayEntries.get(0), UiTheme.FONT_CELL_TITLE, UiTheme.FONT_CELL_SUB), gbc);
+                } else if (dayEntries.size() == 2) {
+                    // Split vertically into 2 rows, shrinking font by 1pt (10pt title, 9pt sub)
+                    JPanel cellPanel = new JPanel(new GridLayout(2, 1, 0, 1));
+                    cellPanel.setBackground(UiTheme.COLOR_GRID);
+                    cellPanel.add(makeSingleEntryCell(dayEntries.get(0), UiTheme.FONT_CELL_TITLE_TINY, UiTheme.FONT_CELL_SUB_TINY));
+                    cellPanel.add(makeSingleEntryCell(dayEntries.get(1), UiTheme.FONT_CELL_TITLE_TINY, UiTheme.FONT_CELL_SUB_TINY));
+                    grid.add(cellPanel, gbc);
                 } else {
-                    // Compact 2-column grid for parallel batches (2x2 for 4 batches, 1x2 for 2 splits)
+                    // 3-4 parallel entries: split into 2x2 grid with 9pt/8pt font
                     int subCols = 2;
                     int subRows = (int) Math.ceil(dayEntries.size() / 2.0);
                     JPanel cellPanel = new JPanel(new GridLayout(subRows, subCols, 1, 1));
-                    cellPanel.setBackground(Color.LIGHT_GRAY);
+                    cellPanel.setBackground(UiTheme.COLOR_GRID);
                     for (TimetableEntry te : dayEntries) {
-                        cellPanel.add(makeEntryCell(te));
+                        cellPanel.add(makeSingleEntryCell(te, UiTheme.FONT_CELL_TITLE_MICRO, UiTheme.FONT_CELL_SUB_MICRO));
                     }
                     grid.add(cellPanel, gbc);
                 }
             }
         }
 
-        // gridPanel itself lives inside the outer JScrollPane created in buildUI()
         gridPanel.add(grid, BorderLayout.CENTER);
         gridPanel.revalidate();
         gridPanel.repaint();
@@ -382,86 +438,177 @@ public class TimetableViewPanel extends JPanel implements MainFrame.Refreshable 
 
     private JPanel makeHeaderCell(String text) {
         JPanel p = new JPanel(new BorderLayout());
-        p.setBackground(new Color(0x1A, 0x73, 0xE8));
+        p.setBackground(UiTheme.COLOR_HEADER);
+        p.setPreferredSize(new Dimension(0, 28));
+        p.setMinimumSize(new Dimension(0, 28));
+        p.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 1, UiTheme.COLOR_GRID));
+
         JLabel l = new JLabel(text, SwingConstants.CENTER);
-        l.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        l.setFont(UiTheme.FONT_HEADER);
         l.setForeground(Color.WHITE);
-        l.setBorder(new EmptyBorder(6, 4, 6, 4));
         p.add(l, BorderLayout.CENTER);
         return p;
     }
 
     private JPanel makeTimeCell(TimeSlot ts) {
-        JPanel p = new JPanel(new GridLayout(2, 1));
-        p.setBackground(new Color(0xE8, 0xF0, 0xFE));
+        JPanel p = new JPanel(new GridLayout(2, 1, 0, 1));
+        p.setBackground(new Color(0xF0, 0xF4, 0xF9));
+        p.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(UiTheme.COLOR_GRID, 1),
+                BorderFactory.createEmptyBorder(2, 2, 2, 2)
+        ));
+        p.setPreferredSize(new Dimension(80, 0));
+        p.setMinimumSize(new Dimension(80, 0));
+
         JLabel slot = new JLabel("S" + ts.getSlotNo(), SwingConstants.CENTER);
-        slot.setFont(new Font("Segoe UI", Font.BOLD, 10));
-        JLabel time = new JLabel(ts.getStartTime().substring(0, 5), SwingConstants.CENTER);
-        time.setFont(new Font("Segoe UI", Font.PLAIN, 9));
-        time.setForeground(Color.GRAY);
+        slot.setFont(UiTheme.bold(10f));
+        slot.setForeground(new Color(0x20, 0x21, 0x24));
+
+        String timeStr = ts.getStartTime() != null && ts.getStartTime().length() >= 5
+                ? ts.getStartTime().substring(0, 5) : "";
+        JLabel time = new JLabel(timeStr, SwingConstants.CENTER);
+        time.setFont(UiTheme.plain(9f));
+        time.setForeground(new Color(0x5F, 0x63, 0x68));
+
         p.add(slot);
         p.add(time);
         return p;
     }
 
-    private JPanel makeEntryCell(TimetableEntry te) {
+    private JPanel makeSingleEntryCell(TimetableEntry te, Font titleFont, Font subFont) {
         Color bg = switch (te.getSessionType()) {
-            case "TH" -> COLOR_TH;
-            case "PR" -> COLOR_PR;
-            case "TU" -> COLOR_TU;
-            default   -> COLOR_FREE;
+            case "TH" -> UiTheme.COLOR_TH;
+            case "PR" -> UiTheme.COLOR_PR;
+            case "TU" -> UiTheme.COLOR_TU;
+            default   -> UiTheme.COLOR_FREE;
         };
 
-        JPanel cell = new JPanel(new GridLayout(3, 1, 0, 1));
+        JPanel cell = new JPanel(new BorderLayout());
         cell.setBackground(bg);
-        cell.setBorder(new EmptyBorder(2, 4, 2, 4));
+        cell.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(UiTheme.COLOR_GRID, 1),
+                BorderFactory.createEmptyBorder(2, 4, 2, 4)
+        ));
 
-        String abbr = te.getSubjectAbbr() != null ? te.getSubjectAbbr() : te.getSubjectName();
-        JLabel subj = new JLabel(abbr + " (" + te.getSessionType() + ")", SwingConstants.CENTER);
-        subj.setFont(new Font("Segoe UI", Font.BOLD, 10));
+        // Line 1: Subject short code (bold) + session type (e.g., "AI (TH)")
+        String abbr = (te.getSubjectAbbr() != null && !te.getSubjectAbbr().trim().isEmpty())
+                ? te.getSubjectAbbr().trim()
+                : (te.getSubjectName() != null ? te.getSubjectName().trim() : "");
+        String line1Text = abbr + " (" + te.getSessionType() + ")";
 
-        String facAbbr = te.getFacultyAbbr() != null ? te.getFacultyAbbr() : "";
-        JLabel fac = new JLabel(facAbbr, SwingConstants.CENTER);
-        fac.setFont(new Font("Segoe UI", Font.PLAIN, 9));
-        fac.setForeground(new Color(0x20, 0x20, 0x60));
+        // Line 2: Faculty initials and room on same line (e.g., "VV · 311", or with batch: "VV · [D] 311")
+        String facAbbr = te.getFacultyAbbr() != null ? te.getFacultyAbbr().trim() : "";
+        String roomName = te.getRoomName() != null ? te.getRoomName().trim() : "";
+        String batchTag = (te.getBatchName() != null && !te.getBatchName().trim().isEmpty())
+                ? "[" + te.getBatchName().trim() + "] " : "";
+        String roomAndBatch = (batchTag + roomName).trim();
 
-        String roomBatch = te.getRoomName() != null ? te.getRoomName() : "";
-        if (te.getBatchName() != null && !te.getBatchName().isEmpty()) {
-            roomBatch = "[" + te.getBatchName() + "] " + roomBatch;
+        String line2Text;
+        if (!facAbbr.isEmpty() && !roomAndBatch.isEmpty()) {
+            line2Text = facAbbr + " \u00B7 " + roomAndBatch;
+        } else if (!facAbbr.isEmpty()) {
+            line2Text = facAbbr;
+        } else {
+            line2Text = roomAndBatch;
         }
-        JLabel room = new JLabel(roomBatch, SwingConstants.CENTER);
-        room.setFont(new Font("Segoe UI", Font.PLAIN, 8));
-        room.setForeground(Color.GRAY);
 
-        cell.add(subj);
-        cell.add(fac);
-        cell.add(room);
+        JPanel textBlock = new JPanel(new GridLayout(2, 1, 0, 1));
+        textBlock.setOpaque(false);
 
-        // Tooltip with full info
-        cell.setToolTipText("<html><b>" + te.getSubjectName() + "</b><br>"
-                + "Faculty: " + (te.getFacultyName() != null ? te.getFacultyName() : "") + "<br>"
-                + "Room: " + (te.getRoomName() != null ? te.getRoomName() : "") + "<br>"
-                + "Type: " + te.getSessionType()
-                + (te.getBatchName() != null ? "<br>Batch: " + te.getBatchName() : "")
-                + "</html>");
+        JLabel l1 = new JLabel(line1Text, SwingConstants.CENTER);
+        l1.setFont(titleFont);
+        l1.setForeground(new Color(0x20, 0x21, 0x24));
+
+        JLabel l2 = new JLabel(line2Text, SwingConstants.CENTER);
+        l2.setFont(subFont);
+        l2.setForeground(new Color(0x3C, 0x40, 0x43));
+
+        textBlock.add(l1);
+        textBlock.add(l2);
+        cell.add(textBlock, BorderLayout.CENTER);
+
+        // Standard 12pt HTML tooltip
+        String tooltip = "<html><body style='font-family:sans-serif;font-size:12pt;padding:3px;'>"
+                + "<b>" + (te.getSubjectName() != null ? te.getSubjectName() : "") + "</b><br>"
+                + "<b>Faculty:</b> " + (te.getFacultyName() != null ? te.getFacultyName() : "-") + "<br>"
+                + "<b>Room:</b> " + (te.getRoomName() != null ? te.getRoomName() : "-") + "<br>"
+                + "<b>Type:</b> " + te.getSessionType()
+                + (te.getBatchName() != null && !te.getBatchName().trim().isEmpty() ? "<br><b>Batch:</b> " + te.getBatchName() : "")
+                + "</body></html>";
 
         // Right-click menu for edit/delete (admin only)
+        JPopupMenu popup = null;
         if (authService.isAdmin()) {
             cell.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-            JPopupMenu popup = new JPopupMenu();
+            popup = new JPopupMenu();
             JMenuItem editItem = new JMenuItem("Edit Entry");
             JMenuItem delItem  = new JMenuItem("Delete Entry");
+            editItem.setFont(UiTheme.FONT_BASE);
+            delItem.setFont(UiTheme.FONT_BASE);
             editItem.addActionListener(ev -> onEditEntry(te));
             delItem.addActionListener(ev  -> onDeleteEntry(te));
             popup.add(editItem);
             popup.add(delItem);
-            cell.addMouseListener(new MouseAdapter() {
-                @Override public void mousePressed(MouseEvent e)  { if (e.isPopupTrigger()) popup.show(cell, e.getX(), e.getY()); }
-                @Override public void mouseReleased(MouseEvent e) { if (e.isPopupTrigger()) popup.show(cell, e.getX(), e.getY()); }
-            });
         }
 
+        attachCellInteractions(cell, bg, popup, tooltip);
         return cell;
+    }
+
+    private void attachCellInteractions(JPanel cell, Color normalBg, JPopupMenu popup, String tooltipText) {
+        if (tooltipText != null) {
+            cell.setToolTipText(tooltipText);
+        }
+
+        MouseAdapter adapter = new MouseAdapter() {
+            @Override
+            public void mouseEntered(MouseEvent e) {
+                cell.setBorder(BorderFactory.createCompoundBorder(
+                        BorderFactory.createLineBorder(UiTheme.COLOR_HEADER, 1),
+                        BorderFactory.createEmptyBorder(2, 4, 2, 4)
+                ));
+                cell.setBackground(UiTheme.COLOR_HOVER);
+            }
+
+            @Override
+            public void mouseExited(MouseEvent e) {
+                Point p = SwingUtilities.convertPoint(e.getComponent(), e.getPoint(), cell);
+                if (p.x < 0 || p.x >= cell.getWidth() || p.y < 0 || p.y >= cell.getHeight()) {
+                    cell.setBorder(BorderFactory.createCompoundBorder(
+                            BorderFactory.createLineBorder(UiTheme.COLOR_GRID, 1),
+                            BorderFactory.createEmptyBorder(2, 4, 2, 4)
+                    ));
+                    cell.setBackground(normalBg);
+                }
+            }
+
+            @Override
+            public void mousePressed(MouseEvent e) {
+                if (popup != null && e.isPopupTrigger()) {
+                    popup.show(e.getComponent(), e.getX(), e.getY());
+                }
+            }
+
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                if (popup != null && e.isPopupTrigger()) {
+                    popup.show(e.getComponent(), e.getX(), e.getY());
+                }
+            }
+        };
+
+        cell.addMouseListener(adapter);
+        for (Component c : cell.getComponents()) {
+            c.addMouseListener(adapter);
+            if (c instanceof Container container) {
+                for (Component sub : container.getComponents()) {
+                    sub.addMouseListener(adapter);
+                    if (tooltipText != null && sub instanceof JComponent jc) {
+                        jc.setToolTipText(tooltipText);
+                    }
+                }
+            }
+        }
     }
 
     // =========================================================================
@@ -516,11 +663,14 @@ public class TimetableViewPanel extends JPanel implements MainFrame.Refreshable 
                             result.isFullyPlaced() ? JOptionPane.INFORMATION_MESSAGE : JOptionPane.WARNING_MESSAGE);
 
                     progressLabel.setText(result.getPlaced().size() + " entries placed.");
+                    updateStatusBar(result.getPlaced().size() + " entries placed.", false);
                     refreshGrid();
                 } catch (Exception ex) {
-                    progressLabel.setText("Error: " + ex.getMessage());
+                    Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+                    progressLabel.setText("Error: " + cause.getMessage());
+                    updateStatusBar("Error during generation: " + cause.getMessage(), true);
                     JOptionPane.showMessageDialog(TimetableViewPanel.this,
-                            "Error during generation: " + ex.getMessage(),
+                            "Error during generation: " + cause.getMessage(),
                             "Generation Error", JOptionPane.ERROR_MESSAGE);
                 }
             }
@@ -618,6 +768,21 @@ public class TimetableViewPanel extends JPanel implements MainFrame.Refreshable 
     }
 
     // =========================================================================
+    // Package-private helpers for automated layout verification
+    // =========================================================================
+    void setTimeSlotsForTesting(List<TimeSlot> slots) {
+        this.allSlots = slots;
+    }
+
+    void buildGridForTesting(List<TimetableEntry> entries) {
+        buildGrid(entries);
+    }
+
+    JPanel getGridPanelForTesting() {
+        return gridPanel;
+    }
+
+    // =========================================================================
     // Helper: combo item with id + label
     private static class ComboItem {
         private final int    id;
@@ -628,4 +793,3 @@ public class TimetableViewPanel extends JPanel implements MainFrame.Refreshable 
         @Override public String toString() { return label; }
     }
 }
-

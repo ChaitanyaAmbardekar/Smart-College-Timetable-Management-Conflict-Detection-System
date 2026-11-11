@@ -6,6 +6,8 @@ import in.frcce.ecs.util.DBConnection;
 import java.sql.*;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * Data-access object for the {@code timetable_entry} table.
@@ -16,6 +18,8 @@ import java.util.List;
  * without issuing additional queries.</p>
  */
 public class TimetableEntryDAO {
+
+    private static final Logger LOG = Logger.getLogger(TimetableEntryDAO.class.getName());
 
     // -------------------------------------------------------------------------
     // SQL constants
@@ -235,7 +239,10 @@ public class TimetableEntryDAO {
                 }
             }
         } catch (SQLException e) {
-            throw new RuntimeException("TimetableEntryDAO.isClassOrBatchBusy failed", e);
+            String detail = String.format("TimetableEntryDAO.isClassOrBatchBusy failed: %s [SQLState: %s, ErrorCode: %d]\nSQL: %s",
+                    e.getMessage(), e.getSQLState(), e.getErrorCode(), SQL_IS_BATCH_SLOT_BUSY_EX);
+            LOG.log(Level.SEVERE, detail, e);
+            throw new RuntimeException(detail, e);
         } finally {
             DBConnection.getInstance().release(con);
         }
@@ -287,7 +294,10 @@ public class TimetableEntryDAO {
             con = DBConnection.getInstance().getConnection();
             return insertWithConnection(te, con);
         } catch (SQLException e) {
-            throw new RuntimeException("TimetableEntryDAO.insert failed", e);
+            String detail = String.format("TimetableEntryDAO.insert failed: %s [SQLState: %s, ErrorCode: %d]\nSQL: %s",
+                    e.getMessage(), e.getSQLState(), e.getErrorCode(), SQL_INSERT);
+            LOG.log(Level.SEVERE, detail, e);
+            throw new RuntimeException(detail, e);
         } finally {
             DBConnection.getInstance().release(con);
         }
@@ -347,8 +357,10 @@ public class TimetableEntryDAO {
                 return ps.executeUpdate() == 1;
             }
         } catch (SQLException e) {
-            throw new RuntimeException(
-                    "TimetableEntryDAO.update failed for id=" + te.getEntryId(), e);
+            String detail = String.format("TimetableEntryDAO.update failed for id=%d: %s [SQLState: %s, ErrorCode: %d]\nSQL: %s",
+                    te.getEntryId(), e.getMessage(), e.getSQLState(), e.getErrorCode(), SQL_UPDATE);
+            LOG.log(Level.SEVERE, detail, e);
+            throw new RuntimeException(detail, e);
         } finally {
             DBConnection.getInstance().release(con);
         }
@@ -368,8 +380,10 @@ public class TimetableEntryDAO {
                 return ps.executeUpdate() > 0;
             }
         } catch (SQLException e) {
-            throw new RuntimeException(
-                    "TimetableEntryDAO.delete failed for id=" + entryId, e);
+            String detail = String.format("TimetableEntryDAO.delete failed for id=%d: %s [SQLState: %s, ErrorCode: %d]\nSQL: %s",
+                    entryId, e.getMessage(), e.getSQLState(), e.getErrorCode(), SQL_DELETE);
+            LOG.log(Level.SEVERE, detail, e);
+            throw new RuntimeException(detail, e);
         } finally {
             DBConnection.getInstance().release(con);
         }
@@ -387,8 +401,10 @@ public class TimetableEntryDAO {
             con = DBConnection.getInstance().getConnection();
             return deleteByClassWithConnection(classId, academicYear, con);
         } catch (SQLException e) {
-            throw new RuntimeException(
-                    "TimetableEntryDAO.deleteByClass failed for classId=" + classId, e);
+            String detail = String.format("TimetableEntryDAO.deleteByClass failed for classId=%d: %s [SQLState: %s, ErrorCode: %d]\nSQL: %s",
+                    classId, e.getMessage(), e.getSQLState(), e.getErrorCode(), SQL_DELETE_BY_CLASS);
+            LOG.log(Level.SEVERE, detail, e);
+            throw new RuntimeException(detail, e);
         } finally {
             DBConnection.getInstance().release(con);
         }
@@ -418,8 +434,10 @@ public class TimetableEntryDAO {
                 }
             }
         } catch (SQLException e) {
-            throw new RuntimeException(
-                    "TimetableEntryDAO.countByFaculty failed for facultyId=" + facultyId, e);
+            String detail = String.format("TimetableEntryDAO.countByFaculty failed for facultyId=%d: %s [SQLState: %s, ErrorCode: %d]\nSQL: %s",
+                    facultyId, e.getMessage(), e.getSQLState(), e.getErrorCode(), SQL_COUNT_BY_FACULTY);
+            LOG.log(Level.SEVERE, detail, e);
+            throw new RuntimeException(detail, e);
         } finally {
             DBConnection.getInstance().release(con);
         }
@@ -448,7 +466,10 @@ public class TimetableEntryDAO {
                 }
             }
         } catch (SQLException e) {
-            throw new RuntimeException("TimetableEntryDAO query failed", e);
+            String detail = String.format("TimetableEntryDAO query failed: %s [SQLState: %s, ErrorCode: %d]\nSQL: %s",
+                    e.getMessage(), e.getSQLState(), e.getErrorCode(), sql);
+            LOG.log(Level.SEVERE, detail, e);
+            throw new RuntimeException(detail, e);
         } finally {
             DBConnection.getInstance().release(con);
         }
@@ -472,7 +493,10 @@ public class TimetableEntryDAO {
                 }
             }
         } catch (SQLException e) {
-            throw new RuntimeException("TimetableEntryDAO.countExists failed", e);
+            String detail = String.format("TimetableEntryDAO.countExists failed: %s [SQLState: %s, ErrorCode: %d]\nSQL: %s",
+                    e.getMessage(), e.getSQLState(), e.getErrorCode(), sql);
+            LOG.log(Level.SEVERE, detail, e);
+            throw new RuntimeException(detail, e);
         } finally {
             DBConnection.getInstance().release(con);
         }
@@ -493,7 +517,10 @@ public class TimetableEntryDAO {
                 }
             }
         } catch (SQLException e) {
-            throw new RuntimeException("TimetableEntryDAO.countExistsExcluding failed", e);
+            String detail = String.format("TimetableEntryDAO.countExistsExcluding failed: %s [SQLState: %s, ErrorCode: %d]\nSQL: %s",
+                    e.getMessage(), e.getSQLState(), e.getErrorCode(), sql);
+            LOG.log(Level.SEVERE, detail, e);
+            throw new RuntimeException(detail, e);
         } finally {
             DBConnection.getInstance().release(con);
         }
@@ -504,8 +531,8 @@ public class TimetableEntryDAO {
         TimetableEntry te = new TimetableEntry();
         te.setEntryId(rs.getInt("entry_id"));
         te.setClassId(rs.getInt("class_id"));
-        int batchId = rs.getInt("batch_id");
-        te.setBatchId(rs.wasNull() ? null : batchId);
+        Object batchObj = rs.getObject("batch_id");
+        te.setBatchId(batchObj != null && ((Number) batchObj).intValue() > 0 ? ((Number) batchObj).intValue() : null);
         te.setSubjectId(rs.getInt("subject_id"));
         te.setFacultyId(rs.getInt("faculty_id"));
         te.setRoomId(rs.getInt("room_id"));

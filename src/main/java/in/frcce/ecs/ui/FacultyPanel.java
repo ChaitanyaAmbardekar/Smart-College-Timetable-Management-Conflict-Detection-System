@@ -29,24 +29,23 @@ public class FacultyPanel extends JPanel implements MainFrame.Refreshable {
 
     private void buildUI() {
         // Toolbar
-        JPanel toolbar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 8));
-        toolbar.setBackground(new Color(0xF1, 0xF3, 0xF4));
+        JPanel toolbar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
+        UiTheme.styleToolbar(toolbar);
 
         JButton addBtn = new JButton("+ Add Faculty");
-        addBtn.setBackground(new Color(0x34, 0xA8, 0x53));
-        addBtn.setForeground(Color.WHITE);
+        UiTheme.styleActionButton(addBtn, new Color(0x34, 0xA8, 0x53), Color.WHITE);
         addBtn.addActionListener(e -> showAddDialog(null));
 
         JButton editBtn = new JButton("✎ Edit");
-        editBtn.setBackground(new Color(0xFB, 0xBC, 0x04));
+        UiTheme.styleActionButton(editBtn, new Color(0xFB, 0xBC, 0x04), Color.BLACK);
         editBtn.addActionListener(e -> onEdit());
 
         JButton toggleBtn = new JButton("Toggle Active");
+        UiTheme.styleButton(toggleBtn);
         toggleBtn.addActionListener(e -> onToggleActive());
 
         JButton delBtn = new JButton("🗑 Delete");
-        delBtn.setBackground(new Color(0xEA, 0x43, 0x35));
-        delBtn.setForeground(Color.WHITE);
+        UiTheme.styleActionButton(delBtn, new Color(0xEA, 0x43, 0x35), Color.WHITE);
         delBtn.addActionListener(e -> onDelete());
 
         toolbar.add(addBtn);
@@ -61,9 +60,7 @@ public class FacultyPanel extends JPanel implements MainFrame.Refreshable {
             @Override public boolean isCellEditable(int r, int c) { return false; }
         };
         table = new JTable(tableModel);
-        table.setRowHeight(24);
-        table.setFont(new Font("Segoe UI", Font.PLAIN, 12));
-        table.getTableHeader().setFont(new Font("Segoe UI", Font.BOLD, 12));
+        UiTheme.applyTableStyle(table);
         table.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
 
         add(new JScrollPane(table), BorderLayout.CENTER);
@@ -127,39 +124,49 @@ public class FacultyPanel extends JPanel implements MainFrame.Refreshable {
                 Dialog.ModalityType.APPLICATION_MODAL);
 
         JPanel p = new JPanel(new GridBagLayout());
-        p.setBorder(new EmptyBorder(16, 20, 16, 20));
+        p.setBorder(new EmptyBorder(10, 14, 10, 14));
         GridBagConstraints g = new GridBagConstraints();
         g.fill = GridBagConstraints.HORIZONTAL;
-        g.insets = new Insets(4, 4, 4, 4);
+        g.insets = new Insets(3, 4, 3, 4);
 
         JTextField nameField = new JTextField(existing != null ? existing.getName() : "", 20);
+        nameField.setFont(UiTheme.FONT_BASE);
         JTextField abbrField = new JTextField(existing != null ? existing.getAbbreviation() : "", 6);
+        abbrField.setFont(UiTheme.FONT_BASE);
         JTextField emailField = new JTextField(existing != null ? existing.getEmail() : "", 20);
+        emailField.setFont(UiTheme.FONT_BASE);
         JComboBox<String> desigCombo = new JComboBox<>(new String[]{
             "Professor", "Associate Professor", "Assistant Professor", "Lab Instructor", "Visiting Faculty"
         });
+        desigCombo.setFont(UiTheme.FONT_BASE);
         if (existing != null) desigCombo.setSelectedItem(existing.getDesignation());
         JSpinner hrsSpin = new JSpinner(new SpinnerNumberModel(
                 existing != null ? existing.getMaxHoursPerWeek() : 18, 1, 40, 1));
+        hrsSpin.setFont(UiTheme.FONT_BASE);
 
-        g.gridx = 0; g.gridy = 0; p.add(new JLabel("Full Name:"), g);
+        JLabel l0 = new JLabel("Full Name:"); l0.setFont(UiTheme.bold(11f));
+        JLabel l1 = new JLabel("Abbreviation:"); l1.setFont(UiTheme.bold(11f));
+        JLabel l2 = new JLabel("Email:"); l2.setFont(UiTheme.bold(11f));
+        JLabel l3 = new JLabel("Designation:"); l3.setFont(UiTheme.bold(11f));
+        JLabel l4 = new JLabel("Max Hrs/Week:"); l4.setFont(UiTheme.bold(11f));
+
+        g.gridx = 0; g.gridy = 0; p.add(l0, g);
         g.gridx = 1; g.gridy = 0; p.add(nameField, g);
 
-        g.gridx = 0; g.gridy = 1; p.add(new JLabel("Abbreviation:"), g);
+        g.gridx = 0; g.gridy = 1; p.add(l1, g);
         g.gridx = 1; g.gridy = 1; p.add(abbrField, g);
 
-        g.gridx = 0; g.gridy = 2; p.add(new JLabel("Email:"), g);
+        g.gridx = 0; g.gridy = 2; p.add(l2, g);
         g.gridx = 1; g.gridy = 2; p.add(emailField, g);
 
-        g.gridx = 0; g.gridy = 3; p.add(new JLabel("Designation:"), g);
+        g.gridx = 0; g.gridy = 3; p.add(l3, g);
         g.gridx = 1; g.gridy = 3; p.add(desigCombo, g);
 
-        g.gridx = 0; g.gridy = 4; p.add(new JLabel("Max Hrs/Week:"), g);
+        g.gridx = 0; g.gridy = 4; p.add(l4, g);
         g.gridx = 1; g.gridy = 4; p.add(hrsSpin, g);
 
         JButton save = new JButton("Save");
-        save.setBackground(new Color(0x1A, 0x73, 0xE8));
-        save.setForeground(Color.WHITE);
+        UiTheme.styleActionButton(save, UiTheme.COLOR_HEADER, Color.WHITE);
         save.addActionListener(e -> {
             String name = nameField.getText().trim();
             String abbr = abbrField.getText().trim().toUpperCase();

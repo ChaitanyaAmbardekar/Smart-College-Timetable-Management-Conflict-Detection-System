@@ -37,17 +37,15 @@ public class UnavailabilityPanel extends JPanel implements MainFrame.Refreshable
     }
 
     private void buildUI() {
-        JPanel toolbar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 8));
-        toolbar.setBackground(new Color(0xF1, 0xF3, 0xF4));
+        JPanel toolbar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
+        UiTheme.styleToolbar(toolbar);
 
         JButton addBtn = new JButton("+ Block Slot");
-        addBtn.setBackground(new Color(0x34, 0xA8, 0x53));
-        addBtn.setForeground(Color.WHITE);
+        UiTheme.styleActionButton(addBtn, new Color(0x34, 0xA8, 0x53), Color.WHITE);
         addBtn.addActionListener(e -> showAddDialog());
 
         JButton delBtn = new JButton("🗑 Remove Block");
-        delBtn.setBackground(new Color(0xEA, 0x43, 0x35));
-        delBtn.setForeground(Color.WHITE);
+        UiTheme.styleActionButton(delBtn, new Color(0xEA, 0x43, 0x35), Color.WHITE);
         delBtn.addActionListener(e -> onDelete());
 
         toolbar.add(addBtn);
@@ -58,9 +56,7 @@ public class UnavailabilityPanel extends JPanel implements MainFrame.Refreshable
             @Override public boolean isCellEditable(int r, int c) { return false; }
         };
         table = new JTable(tableModel);
-        table.setRowHeight(24);
-        table.setFont(new Font("Segoe UI", Font.PLAIN, 12));
-        table.getTableHeader().setFont(new Font("Segoe UI", Font.BOLD, 12));
+        UiTheme.applyTableStyle(table);
         table.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
 
         add(new JScrollPane(table), BorderLayout.CENTER);
@@ -114,29 +110,35 @@ public class UnavailabilityPanel extends JPanel implements MainFrame.Refreshable
         JDialog dlg = new JDialog(SwingUtilities.getWindowAncestor(this),
                 "Block Slot for Faculty", Dialog.ModalityType.APPLICATION_MODAL);
         JPanel p = new JPanel(new GridBagLayout());
-        p.setBorder(new EmptyBorder(16, 20, 16, 20));
+        p.setBorder(new EmptyBorder(10, 14, 10, 14));
         GridBagConstraints g = new GridBagConstraints();
         g.fill = GridBagConstraints.HORIZONTAL;
-        g.insets = new Insets(4, 4, 4, 4);
+        g.insets = new Insets(3, 4, 3, 4);
 
         JComboBox<FacultyItem> facCombo = new JComboBox<>();
+        facCombo.setFont(UiTheme.FONT_BASE);
         for (Faculty f : facDAO.findAll()) facCombo.addItem(new FacultyItem(f));
 
         JComboBox<SlotItem> slotCombo = new JComboBox<>();
+        slotCombo.setFont(UiTheme.FONT_BASE);
         for (TimeSlot ts : slotDAO.findAll()) slotCombo.addItem(new SlotItem(ts));
 
         JTextField reasonField = new JTextField("Meeting / Personal", 20);
+        reasonField.setFont(UiTheme.FONT_BASE);
 
-        g.gridx=0; g.gridy=0; p.add(new JLabel("Faculty:"), g);
+        JLabel l0 = new JLabel("Faculty:"); l0.setFont(UiTheme.bold(11f));
+        JLabel l1 = new JLabel("Time Slot:"); l1.setFont(UiTheme.bold(11f));
+        JLabel l2 = new JLabel("Reason:"); l2.setFont(UiTheme.bold(11f));
+
+        g.gridx=0; g.gridy=0; p.add(l0, g);
         g.gridx=1; g.gridy=0; p.add(facCombo, g);
-        g.gridx=0; g.gridy=1; p.add(new JLabel("Time Slot:"), g);
+        g.gridx=0; g.gridy=1; p.add(l1, g);
         g.gridx=1; g.gridy=1; p.add(slotCombo, g);
-        g.gridx=0; g.gridy=2; p.add(new JLabel("Reason:"), g);
+        g.gridx=0; g.gridy=2; p.add(l2, g);
         g.gridx=1; g.gridy=2; p.add(reasonField, g);
 
         JButton save = new JButton("Save Block");
-        save.setBackground(new Color(0x1A, 0x73, 0xE8));
-        save.setForeground(Color.WHITE);
+        UiTheme.styleActionButton(save, UiTheme.COLOR_HEADER, Color.WHITE);
         save.addActionListener(e -> {
             FacultyItem fi = (FacultyItem) facCombo.getSelectedItem();
             SlotItem si = (SlotItem) slotCombo.getSelectedItem();

@@ -27,3 +27,15 @@ echo "2. Running FrCRCE SE-ECS Seed Data Scheduling Engine Test:"
 echo "============================================================="
 $JAVA_HOME/bin/java -cp "target/classes:target/test-classes" in.frcce.ecs.service.SeedDataSchedulingTest
 
+echo ""
+echo "============================================================="
+echo "3. Running Milestone 2 UI & Layout Verification:"
+echo "============================================================="
+$JAVA_HOME/bin/java -cp "target/classes:target/test-classes:lib/*" in.frcce.ecs.ui.UiThemeAndLayoutTest
+
+echo ""
+echo "============================================================="
+echo "4. Running Part 4 Secondary Panels Style Verification:"
+echo "============================================================="
+$JAVA_HOME/bin/java -cp "target/classes:target/test-classes:lib/*" in.frcce.ecs.ui.SecondaryPanelsTest
+

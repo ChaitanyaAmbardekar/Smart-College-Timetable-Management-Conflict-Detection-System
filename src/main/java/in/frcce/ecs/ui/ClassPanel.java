@@ -52,23 +52,23 @@ public class ClassPanel extends JPanel implements MainFrame.Refreshable {
 
     private JPanel buildClassSection() {
         JPanel panel = new JPanel(new BorderLayout());
-        panel.setBorder(new TitledBorder("Classes / Divisions"));
+        TitledBorder tb = new TitledBorder("Classes / Divisions");
+        tb.setTitleFont(UiTheme.FONT_SECTION);
+        panel.setBorder(tb);
 
-        JPanel toolbar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 8));
-        toolbar.setBackground(new Color(0xF1, 0xF3, 0xF4));
+        JPanel toolbar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
+        UiTheme.styleToolbar(toolbar);
 
         JButton addBtn = new JButton("+ Add Class");
-        addBtn.setBackground(new Color(0x34, 0xA8, 0x53));
-        addBtn.setForeground(Color.WHITE);
+        UiTheme.styleActionButton(addBtn, new Color(0x34, 0xA8, 0x53), Color.WHITE);
         addBtn.addActionListener(e -> showClassDialog(null));
 
         JButton editBtn = new JButton("✎ Edit");
-        editBtn.setBackground(new Color(0xFB, 0xBC, 0x04));
+        UiTheme.styleActionButton(editBtn, new Color(0xFB, 0xBC, 0x04), Color.BLACK);
         editBtn.addActionListener(e -> onEditClass());
 
         JButton delBtn = new JButton("🗑 Delete");
-        delBtn.setBackground(new Color(0xEA, 0x43, 0x35));
-        delBtn.setForeground(Color.WHITE);
+        UiTheme.styleActionButton(delBtn, new Color(0xEA, 0x43, 0x35), Color.WHITE);
         delBtn.addActionListener(e -> onDeleteClass());
 
         toolbar.add(addBtn);
@@ -80,9 +80,7 @@ public class ClassPanel extends JPanel implements MainFrame.Refreshable {
             @Override public boolean isCellEditable(int r, int c) { return false; }
         };
         classTable = new JTable(classTableModel);
-        classTable.setRowHeight(24);
-        classTable.setFont(new Font("Segoe UI", Font.PLAIN, 12));
-        classTable.getTableHeader().setFont(new Font("Segoe UI", Font.BOLD, 12));
+        UiTheme.applyTableStyle(classTable);
         classTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
 
         classTable.getSelectionModel().addListSelectionListener(e -> {
@@ -109,26 +107,26 @@ public class ClassPanel extends JPanel implements MainFrame.Refreshable {
 
     private JPanel buildBatchSection() {
         JPanel panel = new JPanel(new BorderLayout());
-        panel.setBorder(new TitledBorder("Batches"));
+        TitledBorder tb = new TitledBorder("Batches");
+        tb.setTitleFont(UiTheme.FONT_SECTION);
+        panel.setBorder(tb);
 
-        JPanel toolbar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 8));
-        toolbar.setBackground(new Color(0xF1, 0xF3, 0xF4));
+        JPanel toolbar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
+        UiTheme.styleToolbar(toolbar);
 
         batchHeaderLabel = new JLabel("Select a class above to view/manage batches");
-        batchHeaderLabel.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        batchHeaderLabel.setFont(UiTheme.bold(12f));
 
         JButton addBatchBtn = new JButton("+ Add Batch");
-        addBatchBtn.setBackground(new Color(0x34, 0xA8, 0x53));
-        addBatchBtn.setForeground(Color.WHITE);
+        UiTheme.styleActionButton(addBatchBtn, new Color(0x34, 0xA8, 0x53), Color.WHITE);
         addBatchBtn.addActionListener(e -> onAddBatch());
 
         JButton delBatchBtn = new JButton("🗑 Delete Batch");
-        delBatchBtn.setBackground(new Color(0xEA, 0x43, 0x35));
-        delBatchBtn.setForeground(Color.WHITE);
+        UiTheme.styleActionButton(delBatchBtn, new Color(0xEA, 0x43, 0x35), Color.WHITE);
         delBatchBtn.addActionListener(e -> onDeleteBatch());
 
         toolbar.add(batchHeaderLabel);
-        toolbar.add(Box.createHorizontalStrut(20));
+        toolbar.add(Box.createHorizontalStrut(15));
         toolbar.add(addBatchBtn);
         toolbar.add(delBatchBtn);
         panel.add(toolbar, BorderLayout.NORTH);
@@ -137,9 +135,7 @@ public class ClassPanel extends JPanel implements MainFrame.Refreshable {
             @Override public boolean isCellEditable(int r, int c) { return false; }
         };
         batchTable = new JTable(batchTableModel);
-        batchTable.setRowHeight(22);
-        batchTable.setFont(new Font("Segoe UI", Font.PLAIN, 12));
-        batchTable.getTableHeader().setFont(new Font("Segoe UI", Font.BOLD, 12));
+        UiTheme.applyTableStyle(batchTable);
         batchTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
 
         panel.add(new JScrollPane(batchTable), BorderLayout.CENTER);
@@ -208,12 +204,13 @@ public class ClassPanel extends JPanel implements MainFrame.Refreshable {
         JDialog dlg = new JDialog(SwingUtilities.getWindowAncestor(this),
                 existing == null ? "Add Class" : "Edit Class", Dialog.ModalityType.APPLICATION_MODAL);
         JPanel p = new JPanel(new GridBagLayout());
-        p.setBorder(new EmptyBorder(16, 20, 16, 20));
+        p.setBorder(new EmptyBorder(10, 14, 10, 14));
         GridBagConstraints g = new GridBagConstraints();
         g.fill = GridBagConstraints.HORIZONTAL;
-        g.insets = new Insets(4, 4, 4, 4);
+        g.insets = new Insets(3, 4, 3, 4);
 
         JComboBox<String> yearCombo = new JComboBox<>(new String[]{"1 (FE)", "2 (SE)", "3 (TE)", "4 (BE)"});
+        yearCombo.setFont(UiTheme.FONT_BASE);
         if (existing != null) {
             yearCombo.setSelectedIndex(Math.max(0, Math.min(3, existing.getYear() - 1)));
         } else {
@@ -221,24 +218,33 @@ public class ClassPanel extends JPanel implements MainFrame.Refreshable {
         }
 
         JSpinner semSpin = new JSpinner(new SpinnerNumberModel(existing != null ? existing.getSemester() : 3, 1, 8, 1));
+        semSpin.setFont(UiTheme.FONT_BASE);
         JTextField divField = new JTextField(existing != null ? existing.getDivision() : "A", 10);
+        divField.setFont(UiTheme.FONT_BASE);
         JSpinner strengthSpin = new JSpinner(new SpinnerNumberModel(existing != null ? existing.getStrength() : 60, 1, 200, 1));
+        strengthSpin.setFont(UiTheme.FONT_BASE);
         JTextField ayField = new JTextField(existing != null ? existing.getAcademicYear() : "2026-27", 10);
+        ayField.setFont(UiTheme.FONT_BASE);
 
-        g.gridx=0; g.gridy=0; p.add(new JLabel("Engineering Year:"), g);
+        JLabel l0 = new JLabel("Engineering Year:"); l0.setFont(UiTheme.bold(11f));
+        JLabel l1 = new JLabel("Semester:"); l1.setFont(UiTheme.bold(11f));
+        JLabel l2 = new JLabel("Division:"); l2.setFont(UiTheme.bold(11f));
+        JLabel l3 = new JLabel("Student Strength:"); l3.setFont(UiTheme.bold(11f));
+        JLabel l4 = new JLabel("Academic Year:"); l4.setFont(UiTheme.bold(11f));
+
+        g.gridx=0; g.gridy=0; p.add(l0, g);
         g.gridx=1; g.gridy=0; p.add(yearCombo, g);
-        g.gridx=0; g.gridy=1; p.add(new JLabel("Semester:"), g);
+        g.gridx=0; g.gridy=1; p.add(l1, g);
         g.gridx=1; g.gridy=1; p.add(semSpin, g);
-        g.gridx=0; g.gridy=2; p.add(new JLabel("Division:"), g);
+        g.gridx=0; g.gridy=2; p.add(l2, g);
         g.gridx=1; g.gridy=2; p.add(divField, g);
-        g.gridx=0; g.gridy=3; p.add(new JLabel("Student Strength:"), g);
+        g.gridx=0; g.gridy=3; p.add(l3, g);
         g.gridx=1; g.gridy=3; p.add(strengthSpin, g);
-        g.gridx=0; g.gridy=4; p.add(new JLabel("Academic Year:"), g);
+        g.gridx=0; g.gridy=4; p.add(l4, g);
         g.gridx=1; g.gridy=4; p.add(ayField, g);
 
         JButton save = new JButton("Save");
-        save.setBackground(new Color(0x1A, 0x73, 0xE8));
-        save.setForeground(Color.WHITE);
+        UiTheme.styleActionButton(save, UiTheme.COLOR_HEADER, Color.WHITE);
         save.addActionListener(e -> {
             String div = divField.getText().trim().toUpperCase();
             String ay = ayField.getText().trim();
@@ -291,12 +297,18 @@ public class ClassPanel extends JPanel implements MainFrame.Refreshable {
             return;
         }
         JTextField nameField = new JTextField(10);
+        nameField.setFont(UiTheme.FONT_BASE);
         JSpinner strengthSpin = new JSpinner(new SpinnerNumberModel(20, 1, 100, 1));
+        strengthSpin.setFont(UiTheme.FONT_BASE);
 
         JPanel panel = new JPanel(new GridLayout(2, 2, 4, 4));
-        panel.add(new JLabel("Batch Name (e.g. A, B, B1):"));
+        JLabel l1 = new JLabel("Batch Name (e.g. A, B, B1):");
+        l1.setFont(UiTheme.bold(11f));
+        JLabel l2 = new JLabel("Batch Strength:");
+        l2.setFont(UiTheme.bold(11f));
+        panel.add(l1);
         panel.add(nameField);
-        panel.add(new JLabel("Batch Strength:"));
+        panel.add(l2);
         panel.add(strengthSpin);
 
         int res = JOptionPane.showConfirmDialog(this, panel, "Add Batch",
